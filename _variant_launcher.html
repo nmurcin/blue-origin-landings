@@ -1,0 +1,56 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>BLUE ORIGIN LANDINGS — variant launcher</title>
+<style>
+ body{margin:0;background:#070b12;color:#dfe7ee;font-family:"Segoe UI",Arial,sans-serif;padding:40px;line-height:1.5}
+ h1{font-weight:600;letter-spacing:1px}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:1000px;margin-top:24px}
+ .card{background:#0e1622;border:1px solid #22304a;border-radius:12px;padding:20px}
+ .card h2{margin:0 0 6px;font-size:18px;color:#9fd8ff}
+ .card p{margin:0 0 14px;font-size:13.5px;color:#aeb9c6}
+ a{display:inline-block;margin:4px 8px 4px 0;padding:8px 14px;border-radius:8px;background:#1e4fd6;color:#fff;
+   text-decoration:none;font-size:13px}
+ a.sec{background:#2a3850}
+ .note{margin-top:30px;font-size:12.5px;color:#76828c;max-width:760px}
+ code{background:#1a2433;padding:1px 6px;border-radius:4px}
+</style></head><body>
+<h1>BLUE ORIGIN LANDINGS — try the four scale options</h1>
+<p style="color:#aeb9c6;max-width:760px">Same 3 missions in each. The difference is how realistic the booster
+altitude / speed / entry feel. Click a level to jump straight in (dev gate bypasses unlocks). Press
+<code>X</code> in-flight for 2&times; fast-forward — useful for the higher/longer descents in B and C.</p>
+<div class="grid">
+ <div class="card">
+  <h2>Baseline (arcade) — leave as-is</h2>
+  <p>The current compressed arcade game. Separation ~12 km, low speeds. Tight and legible.</p>
+  <a href="blue_origin_landings.html?play=ocean">7×2</a>
+  <a href="blue_origin_landings.html?play=tower">9×4</a>
+  <a href="blue_origin_landings.html?play=mars" class="sec">MK1</a>
+  <a href="blue_origin_landings.html" class="sec">menu</a>
+ </div>
+ <div class="card">
+  <h2>A — Arcade + realistic HUD</h2>
+  <p>Identical gameplay to baseline, but the telemetry reads realistically (×6 display scale, plus a
+     Mach number). Physics untouched. Lowest-risk way to stop it feeling obviously wrong.</p>
+  <a href="blue_origin_landings_A_realistic_hud.html?play=ocean">7×2</a>
+  <a href="blue_origin_landings_A_realistic_hud.html?play=tower">9×4</a>
+  <a href="blue_origin_landings_A_realistic_hud.html?play=mars" class="sec">MK1</a>
+ </div>
+ <div class="card">
+  <h2>B — Moderate scale-up</h2>
+  <p>Believable separation regime (~26–32 km, ~Mach 1.5–2), air starts at ~24 km so the descent is
+     longer and more realistic. Still hand-flyable; use X to fast-forward the coast.</p>
+  <a href="blue_origin_landings_B_moderate_scale.html?play=ocean">7×2</a>
+  <a href="blue_origin_landings_B_moderate_scale.html?play=tower">9×4</a>
+  <a href="blue_origin_landings_B_moderate_scale.html?play=mars" class="sec">MK1</a>
+ </div>
+ <div class="card">
+  <h2>C — Full real-scale entry</h2>
+  <p>Real reentry regime: separation ~65–70 km at ~Mach 5–6, the atmosphere brakes you (peaks ~5 g),
+     then a suicide burn onto Jacklyn. Downrange is still compressed to fit the screen. Hardest, most sim-like.</p>
+  <a href="blue_origin_landings_C_full_sim.html?play=ocean">7×2</a>
+  <a href="blue_origin_landings_C_full_sim.html?play=tower">9×4</a>
+  <a href="blue_origin_landings_C_full_sim.html?play=mars" class="sec">MK1</a>
+ </div>
+</div>
+<p class="note">All four are independent copies. MK1 (the lunar lander) is the same in every variant —
+the scale changes only affect the New Glenn booster descents (7×2 / 9×4). After you pick a direction,
+that variant becomes the product and the others can be deleted.</p>
+</body></html>
