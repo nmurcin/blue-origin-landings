@@ -5739,37 +5739,23 @@ function drawModeThumb(m, x, y, w, h, locked) {
     ctx.fillStyle = '#0c2233'; ctx.fillRect(x, sea, w, y + h - sea);
     ctx.strokeStyle = 'rgba(120,160,190,0.16)'; ctx.lineWidth = px(1);
     for (let i = 1; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(x, sea + i * px(7)); ctx.lineTo(x + w, sea + i * px(7)); ctx.stroke(); }
-    const dw = w * 0.46, dx = cx - dw / 2, dy = sea - px(3);
-    ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx, dy, dw, px(7));   // Jacklyn deck
-    const fw = px(5), fh = h * 0.42, fb = dy - px(2);
-    ctx.fillStyle = 'rgba(255,170,80,0.92)'; ctx.beginPath();      // landing-burn plume
-    ctx.moveTo(cx - fw * 0.7, fb); ctx.lineTo(cx + fw * 0.7, fb); ctx.lineTo(cx, fb + px(11)); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#eef2f6'; ctx.fillRect(cx - fw / 2, fb - fh, fw, fh);   // white NG body
-    ctx.fillStyle = '#1e4fd6'; ctx.fillRect(cx - fw / 2, fb - px(7), fw, px(3));   // blue band
-    // strakes + fins
-    ctx.fillStyle = '#c2c9d0';
-    ctx.beginPath(); ctx.moveTo(cx - fw / 2, fb - fh + px(5)); ctx.lineTo(cx - fw / 2 - px(3), fb - fh + px(10)); ctx.lineTo(cx - fw / 2, fb - fh + px(12)); ctx.closePath(); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(cx + fw / 2, fb - fh + px(5)); ctx.lineTo(cx + fw / 2 + px(3), fb - fh + px(10)); ctx.lineTo(cx + fw / 2, fb - fh + px(12)); ctx.closePath(); ctx.fill();
-  } else if (m === 'tower') {                            // 2 — New Glenn 9×4: steeper, hotter approach to Jacklyn
+    const dw = w * 0.46, dx2 = cx - dw / 2, dy = sea - px(3);
+    ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx2, dy, dw, px(7));   // Jacklyn deck
+    // traced vehicle (GS1 only)
+    ctx.save(); ctx.translate(cx, dy - px(2)); ctx.scale(px(1.1), px(1.1));
+    drawTracedVehicle('ng7x2', 62, 0.588);
+    ctx.restore();
+  } else if (m === 'tower') {                            // 2 — New Glenn 9×4: steeper approach
     let g = ctx.createLinearGradient(0, y, 0, y + h);
     g.addColorStop(0, '#0a0f1c'); g.addColorStop(0.6, '#143049'); g.addColorStop(1, '#0e2438');
     ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
     const sea = y + h * 0.78;
     ctx.fillStyle = '#0c2233'; ctx.fillRect(x, sea, w, y + h - sea);
-    const dw = w * 0.40, dx = cx + px(2) - dw / 2, dy = sea - px(3);
-    ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx, dy, dw, px(7));   // smaller Jacklyn deck
-    // booster on a steep canted approach (leaning, longer plume)
-    ctx.save();
-    ctx.translate(cx + px(2), dy - px(2));
-    ctx.rotate(0.24);
-    const fw = px(5.5), fh = h * 0.5;
-    ctx.fillStyle = 'rgba(255,150,70,0.92)'; ctx.beginPath();
-    ctx.moveTo(-fw * 0.7, 0); ctx.lineTo(fw * 0.7, 0); ctx.lineTo(0, px(17)); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#eef2f6'; ctx.fillRect(-fw / 2, -fh, fw, fh);
-    ctx.fillStyle = '#1e4fd6'; ctx.fillRect(-fw / 2, -px(8), fw, px(3));
-    ctx.fillStyle = '#c2c9d0';   // strakes
-    ctx.beginPath(); ctx.moveTo(-fw / 2, -fh + px(6)); ctx.lineTo(-fw / 2 - px(3.5), -fh + px(12)); ctx.lineTo(-fw / 2, -fh + px(14)); ctx.closePath(); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(fw / 2, -fh + px(6)); ctx.lineTo(fw / 2 + px(3.5), -fh + px(12)); ctx.lineTo(fw / 2, -fh + px(14)); ctx.closePath(); ctx.fill();
+    const dw = w * 0.40, dx2 = cx + px(2) - dw / 2, dy = sea - px(3);
+    ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx2, dy, dw, px(7));   // smaller Jacklyn deck
+    // traced vehicle, tilted (steep approach)
+    ctx.save(); ctx.translate(cx + px(2), dy - px(2)); ctx.rotate(0.22); ctx.scale(px(1.0), px(1.0));
+    drawTracedVehicle('ng9x4', 62, 0.540);
     ctx.restore();
   } else if (m === 'mars') {                             // 3 — Blue Moon MK1 on the lunar surface
     let g = ctx.createLinearGradient(0, y, 0, y + h);
@@ -5781,14 +5767,10 @@ function drawModeThumb(m, x, y, w, h, locked) {
     let gg = ctx.createLinearGradient(0, gy, 0, y + h);
     gg.addColorStop(0, '#75787d'); gg.addColorStop(1, '#2c2e32');
     ctx.fillStyle = gg; ctx.fillRect(x, gy, w, y + h - gy);   // gray regolith
-    // squat lander: body + legs + a single BE-7 plume
-    const ly = gy - px(2), lw = w * 0.30, lh = h * 0.22, lx = cx - lw / 2;
-    ctx.fillStyle = 'rgba(255,170,80,0.85)'; ctx.beginPath();
-    ctx.moveTo(cx - px(2.5), ly); ctx.lineTo(cx + px(2.5), ly); ctx.lineTo(cx, ly + px(8)); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#eef2f6'; ctx.beginPath(); ctx.roundRect(lx, ly - lh, lw, lh, px(3)); ctx.fill();
-    ctx.fillStyle = '#1e4fd6'; ctx.fillRect(lx, ly - px(5), lw, px(2));
-    ctx.strokeStyle = '#1c2024'; ctx.lineWidth = px(1.4); ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(lx + px(1), ly - px(2)); ctx.lineTo(lx - px(5), ly); ctx.moveTo(lx + lw - px(1), ly - px(2)); ctx.lineTo(lx + lw + px(5), ly); ctx.stroke();
+    // traced MK1 lander
+    ctx.save(); ctx.translate(cx, gy - px(2)); ctx.scale(px(2.8), px(2.8));
+    drawTracedVehicle('mk1', 18);
+    ctx.restore();
   } else {                                               // 4 — Blue Moon MK2: the trajectory to the Moon
     ctx.fillStyle = '#05070f'; ctx.fillRect(x, y, w, h);
     for (let i = 0; i < 24; i++) {
