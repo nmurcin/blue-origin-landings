@@ -27,7 +27,7 @@ VEHICLES = {
               'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
               'RHO0': 0, 'HSCALE': 50000, 'CDA_AX': 0, 'CDA_LAT': 0,
-              'spawn': {'x': -4200, 'y': 5000, 'vx': 380, 'vy': -18},
+              'spawn': {'x': 15000, 'y': 5000, 'vx': -340, 'vy': -12},
               'OK_vy': 3.5, 'OK_vx': 2.5, 'padHalf': 30},
 }
 STRAKE_K = 55
