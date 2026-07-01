@@ -1708,8 +1708,17 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // and lift pushes the path to the RIGHT (toward where the body is leaning). This is the "bank to
     // turn" principle — lean the body the way you want to go.
     const Fstrake = sk * r * spd * spd * aoa * atmoT;
+    // Primary lift: perpendicular to velocity (correct aerodynamics)
     ax += Fstrake * lvx / m;
     ay += Fstrake * lvy / m;
+    // Glide extension: a fraction of the lift acts ALONG the velocity direction (like an L/D
+    // ratio > 1 — the strakes don't just lift, they also reduce effective drag at moderate AoA,
+    // letting the booster fly FURTHER in the direction it's going). This gives the "point it
+    // where you want to go and it flies there" feel. Scales with AoA: best at moderate lean.
+    const glideK = 0.35;   // 35% of lift force also pushes along the velocity (L/D effect)
+    const fvx = rvx / spd, fvy = rvy / spd;   // unit vector along velocity
+    ax += Fstrake * glideK * fvx / m;
+    ay += Fstrake * glideK * fvy / m;
   }
 
   // rotation: player torque (+gimbal when burning), aero damping.
