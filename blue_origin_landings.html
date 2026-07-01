@@ -425,8 +425,8 @@ function drawNGFins(finD, nEng) {
 // 7 m × 57.5 m first stage, body side area ≈ 402 m²; 4 fins ≈ 8% ≈ 32 m², strakes ≈ 15% ≈ 60 m²,
 // low-AR lift-curve slope ≈ 2.9 /rad. The constants are then tuned so the strakes' always-on lift
 // stretches the glide (matching the public ~600–1000 km downrange landing reach). NOT real specs.
-const FIN_K    = 22;          // actuated-fin control lift coefficient (player-steered, continuous)
-const STRAKE_K = 55;          // strake passive-lift coefficient (always on → cross-range glide)
+const FIN_K    = 26;          // actuated-fin control lift coefficient (player-steered, continuous)
+const STRAKE_K = 75;          // strake passive-lift coefficient (STRONGER — more body lift for cross-range glide)
 // (Tuned via local/scripts/bo_landings_glide_check.py: gives New Glenn a wider downrange reach
 //  window than the old grid-fin booster and a ~2.4 km steerable spread, while staying stable.)
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
@@ -1740,12 +1740,12 @@ function stepPhysics(s, dt, thr, tq, fin) {
     aacc -= 2.4e-5 * r * spd * vno * atmoT;
   } else {
     // New Glenn fins + strakes give CONTINUOUS aerodynamic authority — no grid-fin stall
-    // lockout. A LIGHT, always-active weathercock pulls the body toward velocity (engines-first
-    // on descent). It's deliberately weak so a held lean sustains an angle of attack — that's
-    // what lets the strakes generate lift and stretch the glide. The pilot holds attitude with
-    // the actuated fins; swinging tail-first after boostback stays the player's job, it just no
-    // longer snaps only inside a 40° window. (Coefficient tuned in bo_landings_glide_check.py.)
-    aacc -= 3.5e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
+    // lockout. A VERY LIGHT weathercock biases the body toward velocity (engines-first on descent)
+    // but deliberately DOES NOT snap it vertical — the vehicle naturally holds ~10-30 deg from
+    // vertical during descent (matching real NG video data), sustaining a constant angle of attack
+    // that lets the strakes generate cross-range lift. The pilot overrides with fins for steering.
+    // Weakened from 3.5e-5 to 2.0e-5 so the descent angle is more inclined (more lift, longer glide).
+    aacc -= 2.0e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
   }
   s.angv += aacc * dt;
   s.ang += s.angv * dt;
@@ -1794,27 +1794,12 @@ function predictTrajectory() {
   const momW = Math.min(1, Math.max(0, (FLIP_Y + 400 - b.y) / 400));
   let mAngv = Math.sign(b.angv) * Math.max(0, Math.abs(b.angv) - 0.12) * momW;
   for (let i = 0; i < 420; i++) {
+    // stepPhysics ALREADY applies the weathercock, strake lift, and fin deflection to the state
+    // (including s.ang and s.angv). So we NO LONGER manually override s.ang here — that was
+    // causing the predictor to snap to vertical while the real vehicle holds ~15-25° AoA from
+    // the strakes, making the ✕ drift. Now the predicted path uses the SAME physics as the real
+    // vehicle, so the ✕ is accurate: where you'll actually land if you hold this attitude + fin.
     stepPhysics(s, 0.3, thr, 0, heldFin);
-    if (!SHIP_MODE) {
-      // one continuous model: she weathervanes toward vertical while falling. The strakes'
-      // always-on lift bends the path even at zero stick (the glide), and your held fin
-      // deflection (heldFin) bends it further — both flow through stepPhysics above, smoothly.
-      if (s.vy < 0) {
-        const dAng = 0.9 * 0.3;
-        if (Math.abs(s.ang) > dAng) s.ang -= Math.sign(s.ang) * dAng;
-        else s.ang = 0;
-      } else s.ang = b.ang;
-      s.angv = 0;
-    } else if (s.y > FLIP_Y) {
-      s.ang = b.ang; s.angv = 0;           // held attitude
-    } else {
-      mAng += mAngv * 0.3;                 // your real spin carries through
-      mAngv *= 0.72;                       // and bleeds off as you damp it
-      const dAng = 0.9 * 0.3;              // while flying the standard flip
-      if (Math.abs(mAng) > dAng) mAng -= Math.sign(mAng) * dAng;
-      else mAng = 0;
-      s.ang = mAng; s.angv = 0;
-    }
     pts.push({ x: s.x, y: s.y });
     if (s.y <= 0) break;
     if (thr > 0 && s.vy > 0) break;  // burning: stop at apex of arrest
