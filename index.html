@@ -1611,18 +1611,17 @@ function newRun(m) {
     };
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: 0, t: 0, sep: false };
   } else {
-    // NEW GLENN 7×2 — booster just after staging: climbing down-range, about to boostback.
-    // Spawn scales with the realism tier (arcade = ×1; moderate/fullsim raise altitude + speed).
+    // NEW GLENN 7×2 — DOWNRANGE DRONESHIP LANDING. Launched from land to the left, separated
+    // moving up-and-right. Continues RIGHTWARD (no boostback — this is a droneship mission, not
+    // RTLS). Bleeds speed with a reentry burn while still moving rightward, uses strakes to glide,
+    // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
+    // closer version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: (2400 + Math.random() * 250) * T().bAltMul,
+      x: -(4000 + Math.random() * 400) * T().bAltMul,   // LEFT of the deck (booster is uprange)
       y: (9800 + Math.random() * 300) * T().bAltMul,
-      vx: (170 + Math.random() * 20) * T().bSpdMul,
-      vy: 170 * (T().bSpdMul > 1 ? 0.5 : 1),   // higher tiers enter shallower (more horizontal)
-      // Boostback attitude: spawn leaning toward the deck (nose canted toward -x). Thrust adds
-      // ax = T·sin(ang)/m, and the booster starts at +x moving +vx (downrange), so the burn must
-      // push -x to walk vx back through zero and bring the predicted landing to the deck at x=0.
-      // A POSITIVE ang here would drive it further downrange — the wrong way for a boostback.
-      ang: -45 * Math.PI / 180,   // lean toward the deck so the boostback burn reduces vx
+      vx: (140 + Math.random() * 20) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
+      vy: -40 * T().bSpdMul,                             // slight descent (mostly horizontal)
+      ang: 45 * Math.PI / 180,   // angled up-and-right (just separated from the stack, launch attitude)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -3700,32 +3699,65 @@ function drawBooster() {
   const NG_H = 62, MK1_H = 18;
   // Landing legs function (called after the traced vehicle to overlay deployment animation).
   function drawLandingLegs(vH) {
-    // MK1: legs always deployed (it's descending the whole time). NG: deploy only in the terminal
-    // vertical descent — low AND slow. Gating on altitude alone swung the legs out mid-glide while
-    // the booster was still screaming sideways toward Jacklyn; real boosters stow until nearly down.
+    // MK1: legs always deployed. NG: deploy only when low AND slow (terminal descent).
     const alwaysOut = mode === 'mars';
-    const nearVertical = Math.abs(b.vx) < 50;   // still flying cross-range → keep them stowed
+    const nearVertical = Math.abs(b.vx) < 50;
     const ext = alwaysOut ? 1.0 : ((b.y < 380 && nearVertical) ? Math.min(1, Math.max(0, (380 - b.y) / 200)) : 0);
-    if (ext < 0.01) return;   // stowed = invisible
-    const e = 1 - Math.pow(1 - ext, 2);   // ease-out (pneumatic feel)
-    const legW = mode === 'mars' ? vH * 0.5 : vH * 0.14;   // how far out the foot reaches
-    const legLen = mode === 'mars' ? vH * 0.55 : vH * 0.18; // leg length (world m)
-    const hingeY = mode === 'mars' ? -vH * 0.25 : -2;       // hinge at base (NG) or mid-body (MK1)
-    const splay = mode === 'mars' ? 1.05 : 1.13;            // deployed angle from vertical
-    // gold-coloured legs for NG (matching the skirt), gray for MK1
-    ctx.strokeStyle = mode === 'mars' ? '#8a939c' : '#caa050';
-    ctx.lineWidth = mode === 'mars' ? 0.8 : 1.2;
-    ctx.lineCap = 'round';
+    if (ext < 0.01) return;
+    const e = 1 - Math.pow(1 - ext, 2);   // pneumatic ease-out
+
+    if (mode === 'mars') {
+      // MK1 lander: simple thin legs (always deployed, gray struts, small pads)
+      ctx.strokeStyle = '#8a939c'; ctx.lineWidth = 0.8; ctx.lineCap = 'round';
+      for (const s of [-1, 1]) {
+        const hx = s * vH * 0.15, hy = -vH * 0.25;
+        const fx = s * vH * 0.5, fy = 0;
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(fx, fy); ctx.stroke();
+        ctx.fillStyle = '#8a939c'; ctx.fillRect(fx - 1.0, fy - 0.25, 2.0, 0.5);
+      }
+      return;
+    }
+
+    // NG LANDING LEGS — A-frame truss design (matched to reference images):
+    // Two struts per side forming a triangle (main strut + brace), hinged from the gold aft skirt,
+    // deploying outward. Wide DARK-RED rectangular footpads at the base. Silver/gray struts.
+    const skirtY = -2;               // hinge point: bottom of the gold aft skirt (near the nozzles)
+    const upperHinge = -vH * 0.12;   // upper hinge (brace attaches higher on the body, inside the skirt)
+    const legLen = vH * 0.22;        // total strut length (m) when deployed
+    const splay = 1.20;              // deployed splay angle (wider than old design — matches reference)
+    const padW = 3.8;                // footpad width (m) — the wide red pads from the reference
+    const padH = 0.7;               // footpad thickness
+    const bodyHalf = vH * 0.06;     // half-width of the body at the skirt (where legs hinge)
+
     for (const s of [-1, 1]) {
-      const hx = s * legW * 0.3, hy = hingeY;
+      // deployment angle: stowed = parallel to body (a=PI), deployed = splayed out
       const a = Math.PI - e * (Math.PI - splay);
       const dx = s * Math.sin(a), dy = Math.cos(a);
+
+      // MAIN STRUT (outer): from the skirt hinge to the footpad
+      const hx = s * bodyHalf, hy = skirtY;
       const fx = hx + dx * legLen, fy = hy + dy * legLen;
-      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(fx, fy); ctx.stroke();
-      // foot pad
-      if (e > 0.4) {
-        ctx.fillStyle = mode === 'mars' ? '#8a939c' : '#caa050';
-        ctx.fillRect(fx - 1.2, fy - 0.3, 2.4, 0.6);
+
+      // BRACE STRUT (inner): from a higher point on the body to the same footpad (forms the A)
+      const bx = s * bodyHalf * 0.5, by = upperHinge;
+      // brace meets the main strut at about 70% down its length (the "knee")
+      const kx = hx + dx * legLen * 0.72, ky = hy + dy * legLen * 0.72;
+
+      // Draw struts (silver/gray metallic, like the reference)
+      ctx.strokeStyle = '#9aa3ac'; ctx.lineWidth = 1.0; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(fx, fy); ctx.stroke();        // main strut
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(kx, ky); ctx.stroke();        // brace strut
+      // cross-brace (the horizontal tie between main + brace at the knee)
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+
+      // FOOTPAD: wide, dark-red/maroon rectangular pad (matches reference images)
+      if (e > 0.3) {
+        ctx.fillStyle = '#8b1a1a';   // dark red/maroon (matches the reference footpad color)
+        const px0 = fx - s * padW * 0.3, py0 = fy - padH / 2;
+        ctx.fillRect(px0 - padW / 2, py0, padW, padH);
+        ctx.strokeStyle = '#4a0e0e'; ctx.lineWidth = 0.3;
+        ctx.strokeRect(px0 - padW / 2, py0, padW, padH);
       }
     }
   }
@@ -4178,8 +4210,8 @@ function flightHint() {
   else if (b.t < 0.55) hint = 'STAGE SEPARATION...';
   else if (b.t < 4 && Math.abs(b.angv) > 0.12) { hint = MOBILE ? 'TUMBLING — ' + MSTEER + ' against the spin' : 'TUMBLING — kill the spin with ← →'; warn = true; }
   else if (b.vx > 40) {
-    hint = b.ang > -0.9 ? 'FLIP FOR BOOSTBACK — swing the nose toward the pad ' + (MOBILE ? '(' + MSTEER + ' left)' : '(←)')
-                        : 'BOOSTBACK — hold ' + BURN_K + ', drag the ✕ onto the target, then cut';
+    hint = Math.abs(b.vx) > 80 ? 'REENTRY BURN — point retrograde (' + STEER_K + '), hold ' + BURN_K + ' to bleed speed'
+                               : 'GLIDE — ride the strakes toward Jacklyn, steer the ✕ onto the target';
     warn = b.y < ENTRY_Y;
   }
   else if (b.y > ENTRY_Y) hint = vDeg > 25 ? 'COAST — swing tail-first (nose up) for entry' : 'COAST the arc — fine-trim the ✕ with short burns';
@@ -5334,9 +5366,9 @@ function drawTimeline() {
     { label: 'COAST',       from: 2500, to: 800,  frac: 0.30 },
     { label: 'DESCENT',     from: 800,  to: 0,    frac: 0.35 }
   ] : [
-    // NG booster: boostback to aim, fin/strake glide to the deck, late landing burn
-    { label: 'BOOSTBACK',   from: 14000, to: T().entryY, frac: 0.32 },
-    { label: 'FIN DESCENT', from: T().entryY, to: 1300, frac: 0.44 },
+    // NG booster: reentry burn to bleed speed, strake glide toward the deck, late landing burn
+    { label: 'ENTRY BURN', from: 14000, to: T().entryY, frac: 0.32 },
+    { label: 'STRAKE GLIDE', from: T().entryY, to: 1300, frac: 0.44 },
     { label: 'LAND', from: 1300, to: 0, frac: 0.24 }
   ];
   // on phones the timeline hugs the left edge and stops above the chips
@@ -5761,7 +5793,7 @@ function drawMenu() {
   hudText('HOW TO FLY', L, ty, 14, '#e8b93c'); ty += px(24);
   const steps = [
     'Steer ← →.   Burn: hold SPACE / ↑.   Fast-forward: X.   Pause: P.',
-    'NG 7×2 / 9×4: boostback to aim the ✕ at Jacklyn, ride the strakes down, then one late burn.',
+    'NG 7×2 / 9×4: bleed speed with a reentry burn, ride the strakes toward Jacklyn, then one late burn.',
     '9×4 is heavier + steeper — lean into the strakes for cross-range (it flies like a lifting body).',
     'Blue Moon MK1: brake retrograde against your velocity, coast, then a vertical suicide burn.',
     'Fuel + precision = score.  RCS is a separate tank — use it wisely.'
@@ -5826,7 +5858,7 @@ function drawMenuNarrow() {
   hudText('HOW TO FLY', x0 + px(16), y + px(22), 12.5, '#e8b93c');
   const steps = [
     MOBILE ? 'Steer: drag the dot.  Burn: hold the button.' : 'Steer ← →.  Burn: hold SPACE / ↑.',
-    'NG: boostback, ride strakes, one late burn.  9×4: lean for cross-range.',
+    'NG: reentry burn to bleed speed, strake-glide to Jacklyn, one late burn.',
     'MK1: brake retrograde, coast, vertical suicide burn.  RCS is separate fuel.'
   ];
   let mfs = 10.5; const mMaxW = bw - px(32);   // shrink uniformly so no step overruns the narrow box
