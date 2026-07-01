@@ -1702,7 +1702,7 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // Lift perpendicular to velocity: compute the unit vector perpendicular to the velocity
     // (pointing "up" relative to the flight path = the lift direction for positive AoA).
     // For a body tilted to have its belly face one side, lift pushes AWAY from the belly.
-    const lvx = -vy / spd, lvy = vx / spd;   // unit vector perpendicular to velocity (rotated 90° CCW)
+    const lvx = -rvy / spd, lvy = rvx / spd;  // unit vector perpendicular to velocity (rotated 90° CCW)
     // Sign: positive AoA (body tilted so nose is "above" the flight path) → lift in the +perp direction.
     // For our coordinate system: if the body is leaned RIGHT of the velocity vector, AoA is positive,
     // and lift pushes the path to the RIGHT (toward where the body is leaning). This is the "bank to
