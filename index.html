@@ -494,7 +494,9 @@ function applyModeParams(m) {
     G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
     ENTRY_Y = T().entryY; FLIP_Y = 3000;
     DRY_MASS = 210000; FUEL0 = 70000;
-    THRUST = 8.4e6; MDOT = 2519;
+    // Landing thrust: ≈2 BE-4 deeply throttled (~4.5 MN) → TWR ≈ 1.6 at landing mass.
+    // Feels like a real suicide burn — time it late or you're going too fast.
+    THRUST = 4.5e6; MDOT = 1350;
     CDA_AX = 165; CDA_LAT = 380;           // wide 7 m body; a touch more drag than the 7×2
   } else {
     // NEW GLENN 7×2 — seven-engine first stage landing on Jacklyn (LPV-1). Public 7 m × 57.5 m
@@ -505,7 +507,9 @@ function applyModeParams(m) {
     G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
     ENTRY_Y = T().entryY; FLIP_Y = 3000;
     DRY_MASS = 180000; FUEL0 = 70000;
-    THRUST = 7.4e6; MDOT = 2219;
+    // Landing thrust: ≈2 BE-4 deeply throttled (~4.0 MN) → TWR ≈ 1.6 at landing mass.
+    // A genuine suicide-burn feel — the old 7.4 MN was too powerful (instant stop).
+    THRUST = 4.0e6; MDOT = 1200;
     CDA_AX = 150; CDA_LAT = 360;
   }
 }
