@@ -607,7 +607,12 @@ function moonStage(stage) {
   }
 }
 
-const HEAT_TOL_BELLY = 7.0e7; // rho*v^3 the heat shield tolerates
+// Engine-first (protected) heat tolerance. LOWERED 7.0e7 → 3.0e7 so that SPEED matters, not just
+// attitude: even perfectly engine-first, a fast reentry (~800 m/s into the interface) exceeds the
+// engine bay's limit and burns up. The DECEL BURN — fired HIGH, above the entry interface — is the
+// only way to bleed that speed before the heat pulse. This makes the reentry burn truly mandatory
+// (a no-burn engine-first descent now cooks at ~1.8x tol; a well-timed high decel burn survives at ~0.8x).
+const HEAT_TOL_BELLY = 3.0e7; // rho*v^3 the protected (engine-first) side tolerates
 const HEAT_TOL_BARE  = 1.4e7; // tolerance with the wrong side forward
 const HEAT_DMG_DIV   = 6.0e5; // damage rate divisor (lowered from 1.2e6 so the decel burn is TRULY
                               // mandatory: after the flat-plate lift fix removed the old prograde
@@ -1661,9 +1666,12 @@ function newRun(m) {
     // the whole launch beat (FIRING → MECO → SEP → GS2 ignition → handoff) plays out before any
     // reentry heating. Start it ascending (vy>0) at a shallow prograde tilt so the GS1 burn visibly
     // pushes it up; after MECO + separation it arcs over and begins the fall the player will fly.
-    b.y = ENTRY_Y + 4000 + Math.random() * 500;   // safely above the heating interface
-    b.vx = Math.abs(b.vx) * 0.45;                  // moderate downrange (rightward) speed
-    b.vy = 120;                                     // ASCENDING at open (GS1 still pushing up)
+    // Open HIGH (so the fall builds real reentry speed) and carry strong downrange velocity through
+    // MECO — like a real booster at staging: fast + high. After MECO it arcs over and plunges back
+    // FAST (~800 m/s into the interface), so the decel burn is mandatory to survive the heat.
+    b.y = ENTRY_Y + 14000 + Math.random() * 1000;  // ~22 km — high above the heating layer
+    b.vx = Math.abs(b.vx) * 0.9;                    // keep most of the Mach-class downrange speed
+    b.vy = 180;                                     // ASCENDING at open (GS1 still pushing up)
     b.ang = 22 * Math.PI / 180;   // shallow prograde lean (up-and-right) — launch/ascent attitude
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: b.ang, t: 0, sep: false, mated: true };
   } else {
@@ -1710,7 +1718,13 @@ function stepPhysics(s, dt, thr, tq, fin) {
   const spd = Math.hypot(rvx, rvy);
   // aero ramps in at the entry interface — no air, no forces
   const atmoT = Math.min(1, Math.max(0, (ENTRY_Y + 2500 - s.y) / 2200));
-  const Fax = -0.5 * r * CDA_AX  * Math.abs(vax) * vax;
+  // Axial drag is REDUCED high in the entry regime (thin hypersonic air brakes little), so the
+  // booster stays fast as it plunges — making reentry genuinely lethal unless you DECEL BURN to
+  // bleed speed. Below the interface, full axial drag returns for the terminal glide/landing.
+  // (NG booster modes only; moon/mars keep full drag.) axDragF: ~0.4 up high → 1.0 at/below entry.
+  const ngBooster = (mode === 'ocean' || mode === 'tower');
+  const axDragF = ngBooster ? Math.min(1, Math.max(0.4, 1 - (s.y - ENTRY_Y) / 12000)) : 1;
+  const Fax = -0.5 * r * CDA_AX * axDragF * Math.abs(vax) * vax;
   const Fno = -0.5 * r * CDA_LAT * Math.abs(vno) * vno;
   if (mode === 'moon' && SHIP_MODE && Math.abs(s.ang) < 0.5) {
     // Final propulsive landing (flipped near-vertical): aero is PURE DRAG opposing velocity, so
