@@ -41,7 +41,7 @@ LIFT_CLAMP_G = 1.2   # lift ceiling as a multiple of weight m*G (HTML const LIFT
 RCS0 = {'ocean': 600, 'tower': 700, 'mars': 2000}
 RCS_BURN = 55
 # heat model (matches the game): q3 = rho*v^3*hRamp; burn up if damage >= 100
-HEAT_TOL_BELLY = 7.0e7
+HEAT_TOL_BELLY = 3.0e7   # engine-first tolerance (lowered so SPEED matters, not just attitude)
 HEAT_TOL_BARE = 1.4e7
 HEAT_DMG_DIV = 6.0e5  # matches HTML: lowered from 1.2e6 so the decel burn stays mandatory after
                       # the flat-plate lift fix removed the old prograde push (see HTML comment).
@@ -62,7 +62,8 @@ def sim_landing(mode, verbose=False):
     fuel, t, dt = float(FUEL), 0.0, 0.02
     SK = STRAKE_K * v.get('STRAKE_MULT', 1.0)
     dmg = 0.0; maxheat = 0.0
-    ang = -0.18 if mode == 'tower' else (math.atan2(-vx, -vy) * 0.5 if mode == 'mars' else 0.4)
+    # start engine-first (retrograde) for the NG boosters so they don't cook broadside on frame 1
+    ang = math.atan2(-vx, -vy) if mode in ('ocean', 'tower') else (math.atan2(-vx, -vy) * 0.5 if mode == 'mars' else 0.4)
 
     while y > 0 and t < 600:
         m = DRY + fuel
@@ -78,7 +79,10 @@ def sim_landing(mode, verbose=False):
             nxx, nxy = axy, -axx
             vax = vx * axx + vy * axy
             vno = vx * nxx + vy * nxy
-            Fax = -0.5 * r * CDA_AX * abs(vax) * vax
+            # reduced axial drag high in the entry regime (matches HTML axDragF): keeps the booster
+            # fast on the plunge so reentry heat is lethal without a decel burn.
+            axDragF = min(1, max(0.4, 1 - (y - ENTRY_Y) / 12000)) if mode in ('ocean', 'tower') else 1
+            Fax = -0.5 * r * CDA_AX * axDragF * abs(vax) * vax
             Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
             ax += (Fax * axx + Fno * nxx) / m
             ay += (Fax * axy + Fno * nxy) / m
@@ -118,15 +122,19 @@ def sim_landing(mode, verbose=False):
             else:
                 ang = 0; thr = 0  # coast (save fuel)
         elif mode in ('tower', 'ocean'):
-            # Downrange droneship landing: DECEL BURN (retrograde, high + fast) to survive reentry
-            # heat, then GLIDE toward the deck, then terminal vertical arrest.
+            # Downrange droneship landing: DECEL BURN (retrograde) fired HIGH — above the entry
+            # interface — to bleed speed before the heat pulse, then GLIDE, then terminal arrest.
             dist = -x
-            if sp > 350 and y > ENTRY_Y - 500:
-                ang = math.atan2(-vx, -vy); thr = 1.0                 # DECEL BURN (retrograde brake)
+            # heat gate: while still in the hot regime (near/above entry AND fast), hold ENGINE-FIRST
+            # (retrograde, belly~0) and burn to bleed speed — do NOT lean to glide yet or you go
+            # broadside and cook. Only start the strake glide once past the heat pulse (slow enough).
+            hot = (y > ENTRY_Y - 1500) and (sp > 220)
+            if hot:
+                ang = math.atan2(-vx, -vy); thr = 1.0                 # DECEL BURN, engine-first through the heat
             elif y < stop_dist * 1.15 and vy < -4:
                 ang = max(-0.12, min(0.12, -vx * 0.01)); thr = 1.0   # terminal vertical arrest
             elif dist > 500:
-                ang = 30 * math.pi / 180; thr = 0                     # glide right toward the deck
+                ang = 30 * math.pi / 180; thr = 0                     # glide right toward the deck (past the heat)
             elif abs(vx) > 12:
                 ang = math.atan2(-vx, 0) * 0.3; thr = 0.5             # kill residual drift near deck
             else:
@@ -183,15 +191,17 @@ def _sim_heat(mode, do_decel):
         r = rho(y, 1.225, 8500)
         sp = math.hypot(vx, vy) or 1e-9
         atmoT = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
-        # decel burn (retrograde) high + fast; otherwise just glide (no braking)
-        if do_decel and sp > 350 and y > ENTRY_Y - 500:
+        # decel burn: fire HIGH (above the entry interface) and engine-first to bleed speed before
+        # the heat pulse. no-decel: just point engine-first (retrograde) and never burn.
+        if do_decel and sp > 200 and y > ENTRY_Y - 500:
             ang = math.atan2(-vx, -vy); thr = 1.0
         else:
-            ang = 30 * math.pi / 180 if -x > 500 else 0.0; thr = 0
+            ang = math.atan2(-vx, -vy); thr = 0   # engine-first, no burn (the "cheese" attempt)
         axx, axy = math.sin(ang), math.cos(ang)
         nxx, nxy = axy, -axx
         vax = vx * axx + vy * axy; vno = vx * nxx + vy * nxy
-        Fax = -0.5 * r * CDA_AX * abs(vax) * vax
+        axDragF = min(1, max(0.4, 1 - (y - ENTRY_Y) / 12000))
+        Fax = -0.5 * r * CDA_AX * axDragF * abs(vax) * vax
         Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
         ax = (Fax * axx + Fno * nxx) / m; ay = -G + (Fax * axy + Fno * nxy) / m
         # FLAT-PLATE STRAKE LIFT (matches the fixed game): CL = sin(beta)*cos(beta),
