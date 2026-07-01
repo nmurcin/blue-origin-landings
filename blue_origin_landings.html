@@ -3757,17 +3757,23 @@ function drawBooster() {
   const VEH_W = mode === 'ocean' ? 5.4 : 9;
   const VEH_H = mode === 'ocean' ? 52 : mode === 'mars' ? 50 : BH;
   const VW = mode === 'ocean' ? 0.55 : mode === 'mars' ? 0.35 : 1;   // plume width (MK1 = single small BE-7)
-  // RCS thruster puffs — FORWARD-END ONLY (New Glenn's RCS is a forward pod; a single lateral jet
-  // near the top produces the turning couple about the CoG). Puff size scales with the vehicle so
-  // the small MK1 lander gets a small jet. Only shows while there's RCS propellant + steering input.
+  // RCS thruster puffs — FORWARD MODULE ONLY. On New Glenn GS1, all RCS thrusters live on the
+  // forward module (where the fins are, at the TOP of the trimmed first stage). The puffs must
+  // attach to the GS1-cut vehicle, NOT the full-stack nose — otherwise they float above the visible
+  // booster. For MK1 lander, RCS is at the top of the lander body (scaled small).
+  // The GS1 forward module = the top of what's drawn after the gold-band clip.
+  const NG_H_DRAW = 62;   // full traced height (world m); MK1 lander is 18 m
+  const gs1Top = mode === 'ocean' ? -(0.588 * NG_H_DRAW) : mode === 'tower' ? -(0.540 * NG_H_DRAW) : -(18 * 0.9);
   const qbarB = 0.5 * rho(b.y) * (b.vx * b.vx + b.vy * b.vy);
   if (Math.abs(b.tqIn) > 0.2 && (b.rcsFuel === undefined || b.rcsFuel > 0) &&
       (b.y > ENTRY_Y + 1500 || qbarB < 2500) && scene === 'flying') {
     const d = Math.sign(b.tqIn);
     ctx.fillStyle = 'rgba(225,240,255,' + (0.55 + Math.random() * 0.3).toFixed(2) + ')';
     const jl = (mode === 'mars' ? 3 : 6) + Math.random() * 3;   // jet length (m), smaller on MK1
-    const ny = -VEH_H + VEH_H * 0.10;                            // forward pod, ~10% down from the nose
-    // a lateral jet firing to −d off the forward pod → nose swings toward +d (the couple you steer)
+    // Position the RCS puff at the GS1 forward module (top of the visible trimmed stage, where
+    // the fins + strakes are). A touch below the cut so it visually attaches to the body.
+    const ny = gs1Top + 2;   // 2 m below the cut line = visually on the forward module
+    // a lateral jet firing to −d off the forward module → nose swings toward +d
     ctx.beginPath();
     ctx.moveTo(-d * VEH_W / 2, ny);
     ctx.lineTo(-d * (VEH_W / 2 + jl), ny - jl * 0.28);
