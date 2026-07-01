@@ -23,7 +23,7 @@ VEHICLES = {
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
               'spawn': {'x': -7000, 'y': 11500, 'vx': 180, 'vy': -60},
-              'STRAKE_MULT': 1.8,
+              'STRAKE_MULT': 1.35,
               'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
               'RHO0': 0, 'HSCALE': 50000, 'CDA_AX': 0, 'CDA_LAT': 0,
