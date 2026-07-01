@@ -435,6 +435,29 @@ const STRAKE_K = 55;          // strake passive-lift coefficient (always on → 
 const ORB_RCS_ACC  = 0.9;     // rad/s^2 from RCS in space
 const ORB_RCS_DAMP = 0.7;     // 1/s gentle rate bleed → steady-state max ≈ 1.3 rad/s
 
+// ---------- REALISM TIERS ----------
+// One game, three physics fidelities selected on the menu. A tier is a PARAMETER SET, not a
+// separate file — applyModeParams() and newRun() read the active tier to scale the booster
+// entry regime, and the HUD reads dispAlt/dispSpd to show plausible real numbers.
+//   arcade   — original compressed arcade physics; HUD shows ×6 real-looking altitude/speed + Mach.
+//   moderate — believable separation regime (~26-32 km, ~Mach 1.5-2); HUD is already ~real, no scale.
+//   fullsim  — full real-scale entry (~65-70 km, hypersonic); real HUD. (Moderate/Full-Sim physics are
+//              WIRED + runnable but flagged "tuning in progress" — Arcade is the polished Milestone-1 tier.)
+// bAltMul/bSpdMul scale the BOOSTER (ocean/tower) spawn altitude+speed; entryY/hscale set the air onset;
+// dispAlt/dispSpd are HUD-only display multipliers so numbers read realistically without touching physics.
+const TIER = {
+  arcade:   { name: 'ARCADE',    tuned: true,  dispAlt: 6.0, dispSpd: 6.0,
+              bAltMul: 1.0, bSpdMul: 1.0, entryY: 8500,  hscale: 8500 },
+  moderate: { name: 'MODERATE',  tuned: false, dispAlt: 1.0, dispSpd: 1.0,
+              bAltMul: 2.7, bSpdMul: 3.0, entryY: 24000, hscale: 12000 },
+  fullsim:  { name: 'FULL SIM',  tuned: false, dispAlt: 1.0, dispSpd: 1.0,
+              bAltMul: 6.0, bSpdMul: 8.0, entryY: 70000, hscale: 8500 },
+};
+const TIER_ORDER = ['arcade', 'moderate', 'fullsim'];
+let tier = 'arcade';                 // active tier (set from save at boot / by the menu picker)
+function T() { return TIER[tier] || TIER.arcade; }   // active tier params
+const SPEED_OF_SOUND = 340;          // m/s, for the displayed Mach number
+
 function applyModeParams(m) {
   // No mission belly-flops in this build: New Glenn lands engines-first; Blue Moon lands
   // upright on its engines in vacuum. So SHIP_MODE stays false everywhere (it gated the old
@@ -463,8 +486,8 @@ function applyModeParams(m) {
     // NEW GLENN 9×4 — heavier nine-engine first stage; higher-energy steep entry + tighter
     // touchdown (see newRun + evalTouchdown). Landing burn ≈ throttled BE-4 cluster:
     // THRUST 8.4e6 → MDOT = 8.4e6/(340·9.80665) = 2519 kg/s; landing TWR ≈ 3.1 at 280 t.
-    G = 9.81; RHO0 = 1.225; HSCALE = 8500;
-    ENTRY_Y = 8500; FLIP_Y = 3000;
+    G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
+    ENTRY_Y = T().entryY; FLIP_Y = 3000;
     DRY_MASS = 210000; FUEL0 = 70000;
     THRUST = 8.4e6; MDOT = 2519;
     CDA_AX = 165; CDA_LAT = 380;           // wide 7 m body; a touch more drag than the 7×2
@@ -474,8 +497,8 @@ function applyModeParams(m) {
     // = 7.4e6/(340·9.80665) = 2219 kg/s; landing TWR ≈ 3.0 at 250 t. CDA scaled UP from a slim
     // booster for the 7 m body (anchored on, but reduced from, the geometric (7/3.7)²≈3.6× for
     // controllable gameplay).
-    G = 9.81; RHO0 = 1.225; HSCALE = 8500;
-    ENTRY_Y = 8500; FLIP_Y = 3000;
+    G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
+    ENTRY_Y = T().entryY; FLIP_Y = 3000;
     DRY_MASS = 180000; FUEL0 = 70000;
     THRUST = 7.4e6; MDOT = 2219;
     CDA_AX = 150; CDA_LAT = 360;
@@ -753,21 +776,55 @@ window.addEventListener('resize', resize);
 resize();
 
 // ---------- Persistence ----------
+// Per-tier progress: bests + wins are tracked SEPARATELY for each realism tier. The flat fields
+// (bestOcean/bestTower/bestMars/oceanWins) always mirror the ACTIVE tier so the ~10 UI read-sites
+// need no changes; loadTierStats()/saveTierStats() copy in/out of save.tiers[tier], and switching
+// the tier re-syncs them. Old flat saves migrate into the 'arcade' tier on first load.
 function loadSave() {
-  const def = { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0, bestMoon: 0, pilot: null, referredBy: '' };
-  try { return Object.assign(def, JSON.parse(localStorage.getItem('boosterDown') || '{}')); }
-  catch (e) { return def; }
+  const def = { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0, bestMoon: 0,
+                pilot: null, referredBy: '', tier: 'arcade', tiers: {} };
+  let s;
+  try { s = Object.assign(def, JSON.parse(localStorage.getItem('boosterDown') || '{}')); }
+  catch (e) { s = def; }
+  if (!s.tiers) s.tiers = {};
+  // migrate a pre-tier save: seed the arcade tier from the old flat bests
+  if (!s.tiers.arcade && (s.bestOcean || s.bestTower || s.bestMars || s.oceanWins)) {
+    s.tiers.arcade = { oceanWins: s.oceanWins || 0, bestOcean: s.bestOcean || 0,
+                       bestTower: s.bestTower || 0, bestMars: s.bestMars || 0 };
+  }
+  return s;
 }
 const save = loadSave();
 function persist() { try { localStorage.setItem('boosterDown', JSON.stringify(save)); } catch (e) {} }
+// Copy the active tier's stored stats into the flat fields the UI reads (call after tier changes).
+function loadTierStats() {
+  const t = save.tiers[tier] || { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0 };
+  save.oceanWins = t.oceanWins || 0; save.bestOcean = t.bestOcean || 0;
+  save.bestTower = t.bestTower || 0; save.bestMars = t.bestMars || 0;
+}
+// Write the flat fields back into the active tier's block, then persist.
+function saveTierStats() {
+  save.tiers[tier] = { oceanWins: save.oceanWins, bestOcean: save.bestOcean,
+                       bestTower: save.bestTower, bestMars: save.bestMars };
+  persist();
+}
+tier = save.tier || 'arcade';   // restore the picked tier
+loadTierStats();                // seed the flat fields for the active tier
+// Switch the active realism tier (from the menu picker): persist + re-sync per-tier stats.
+function setTier(t) {
+  if (!TIER[t] || t === tier) return;
+  tier = t; save.tier = t; loadTierStats(); persist();
+}
 
 // ---------- Leaderboard / flight roster ----------
 const gateEl = document.getElementById('gate');
 const board = { entries: [], status: 'idle', offline: false };
+// Each realism tier keeps its own local leaderboard (separate localStorage key).
+function boardKey() { return 'boosterBoard_' + tier; }
 
 function localEntries() {
   let list = [];
-  try { list = JSON.parse(localStorage.getItem('boosterBoard') || '[]'); } catch (e) {}
+  try { list = JSON.parse(localStorage.getItem(boardKey()) || '[]'); } catch (e) {}
   const best = {};
   for (const e of list) {
     const k = e.n + '|' + e.m;
@@ -783,9 +840,9 @@ function submitScore(m, score) {
   // local mirror (named) — instant board + offline; only meaningful once a callsign is set
   if (save.pilot) {
     let list = [];
-    try { list = JSON.parse(localStorage.getItem('boosterBoard') || '[]'); } catch (e) {}
+    try { list = JSON.parse(localStorage.getItem(boardKey()) || '[]'); } catch (e) {}
     list.push({ n: save.pilot.name, m, s: score });
-    try { localStorage.setItem('boosterBoard', JSON.stringify(list.slice(-200))); } catch (e) {}
+    try { localStorage.setItem(boardKey(), JSON.stringify(list.slice(-200))); } catch (e) {}
   }
   // Supabase: submit under our uid by SPENDING this run's token — the server checks the
   // token is ours + unused + the run wasn't instant, then caps the value at the ceiling.
@@ -1535,11 +1592,12 @@ function newRun(m) {
     // NEW GLENN 9×4 — higher-energy, steeper entry than the 7×2: faster downrange, higher and
     // farther out at separation, so you MUST lean on the strakes' cross-range glide to reach
     // Jacklyn. Heavier vehicle + tighter touchdown window (see applyModeParams + evalTouchdown).
+    // Spawn scales with the realism tier (arcade = ×1; moderate/fullsim raise altitude + speed).
     b = {
-      x: 3200 + Math.random() * 300,
-      y: 11500 + Math.random() * 400,
-      vx: 230 + Math.random() * 25,
-      vy: 240,
+      x: (3200 + Math.random() * 300) * T().bAltMul,
+      y: (11500 + Math.random() * 400) * T().bAltMul,
+      vx: (230 + Math.random() * 25) * T().bSpdMul,
+      vy: 240 * (T().bSpdMul > 1 ? 0.5 : 1),   // higher tiers enter shallower (more horizontal)
       ang: 45 * Math.PI / 180,   // stack attitude: prograde, nose up-range
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -1554,11 +1612,12 @@ function newRun(m) {
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: 0, t: 0, sep: false };
   } else {
     // NEW GLENN 7×2 — booster just after staging: climbing down-range, about to boostback.
+    // Spawn scales with the realism tier (arcade = ×1; moderate/fullsim raise altitude + speed).
     b = {
-      x: 2400 + Math.random() * 250,
-      y: 9800 + Math.random() * 300,
-      vx: 170 + Math.random() * 20,
-      vy: 170,
+      x: (2400 + Math.random() * 250) * T().bAltMul,
+      y: (9800 + Math.random() * 300) * T().bAltMul,
+      vx: (170 + Math.random() * 20) * T().bSpdMul,
+      vy: 170 * (T().bSpdMul > 1 ? 0.5 : 1),   // higher tiers enter shallower (more horizontal)
       ang: 45 * Math.PI / 180,   // stack attitude: prograde, nose up-range
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -2030,7 +2089,7 @@ function finish(ok, title, lines, score, breakdown) {
     } else {
       save.bestMars = Math.max(save.bestMars, result.score);
     }
-    persist();
+    saveTierStats();   // writes the flat bests back into the active tier's block + persists
     submitScore(mode, result.score);
     playChime();
   } else {
@@ -2047,9 +2106,11 @@ function crash(x, y, reason) {
 
 function evalTouchdown() {
   const vDeg = Math.abs(b.ang * 180 / Math.PI);
+  // booster speeds shown at the tier's display scale; mars (MK1 lunar) is already real-scale
+  const sf = (mode === 'mars') ? 1 : T().dispSpd;
   const lines = [
-    'Vertical speed  ' + (-b.vy).toFixed(1) + ' m/s',
-    'Drift           ' + Math.abs(b.vx).toFixed(1) + ' m/s',
+    'Vertical speed  ' + (-b.vy * sf).toFixed(1) + ' m/s',
+    'Drift           ' + (Math.abs(b.vx) * sf).toFixed(1) + ' m/s',
     'Tilt            ' + vDeg.toFixed(1) + '°',
     'Offset          ' + Math.abs(b.x).toFixed(1) + ' m',
     'Fuel left       ' + Math.round(b.fuel) + ' kg'
@@ -4158,12 +4219,23 @@ function drawHudPanel() {
   // attitude ball + engine cluster float above the readouts, flush right
   drawAttitudeIndicator(rxv - px(20), y - px(150), px(20), true);
   drawEngineCluster(rxv - px(17), y - px(48), px(17), true);
+  // Atmospheric readouts scale by the tier's display factor so numbers read realistically
+  // (arcade ×6 over the compressed world; moderate/fullsim ×1 since they're already real-scale).
+  const dispSpd = spd * T().dispSpd, dispAlt = b.y * T().dispAlt;
   label('SPD', bx, y, 7.5, WL);
-  hudText(orbital ? spd.toFixed(2) + ' KM/S' : Math.round(spd * 3.6).toLocaleString() + ' KM/H', rxv, y, 10.5, '#ffffff', 'right');
-  y += px(17);
+  hudText(orbital ? spd.toFixed(2) + ' KM/S'
+                  : (dispSpd >= 1000 ? (dispSpd / 1000).toFixed(2) + ' KM/S'
+                                     : Math.round(dispSpd * 3.6).toLocaleString() + ' KM/H'),
+          rxv, y, 10.5, '#ffffff', 'right');
+  y += px(16);
+  if (!orbital) {   // realistic Mach readout in the atmosphere
+    label('MACH', bx, y, 7.5, WL);
+    hudText((dispSpd / SPEED_OF_SOUND).toFixed(1), rxv, y, 9, dispSpd / SPEED_OF_SOUND > 1 ? '#9fd8ff' : '#ffffff', 'right');
+    y += px(13);
+  }
   label('ALT', bx, y, 7.5, WL);
   hudText(orbital ? km(altKm)
-                  : (b.y >= 10000 ? (b.y / 1000).toFixed(1) + ' KM' : Math.max(0, Math.round(b.y)).toLocaleString() + ' M'),
+                  : (dispAlt >= 1000 ? (dispAlt / 1000).toFixed(1) + ' KM' : Math.max(0, Math.round(dispAlt)).toLocaleString() + ' M'),
           rxv, y, 10.5, '#ffffff', 'right');
   y += px(16);
   if (orbital) {
@@ -4183,7 +4255,7 @@ function drawHudPanel() {
     }
   } else {
     const vyC = -b.vy > 100 ? '#ff9a66' : 'rgba(255,255,255,0.9)';
-    hudText('↓' + (-b.vy).toFixed(0) + '  ' + (b.vx >= 0 ? '→' : '←') + Math.abs(b.vx).toFixed(0) +
+    hudText('↓' + (-b.vy * T().dispSpd).toFixed(0) + '  ' + (b.vx >= 0 ? '→' : '←') + (Math.abs(b.vx) * T().dispSpd).toFixed(0) +
             '  ∠' + (b.ang * 180 / Math.PI).toFixed(0) + '°', rxv, y, 8.5, vyC, 'right'); y += px(13);
   }
   y += px(6);
@@ -5655,15 +5727,36 @@ function drawModeThumb(m, x, y, w, h, locked) {
   }
 }
 
+// Realism-tier picker: a centered 3-segment toggle. Active tier highlighted; the not-yet-tuned
+// tiers (moderate/fullsim) show a small "β" so the player knows they're work-in-progress.
+function drawTierToggle(cx, cy) {
+  const segW = px(112), segH = px(26), gap = px(4);
+  const totalW = segW * 3 + gap * 2, x0 = cx - totalW / 2;
+  hudText('REALISM', cx, cy - px(11), 8, 'rgba(255,255,255,0.55)', 'center');
+  for (let i = 0; i < 3; i++) {
+    const key = TIER_ORDER[i], tp = TIER[key];
+    const x = x0 + i * (segW + gap), active = key === tier;
+    ctx.fillStyle = active ? 'rgba(30,79,214,0.85)' : 'rgba(20,28,42,0.8)';
+    ctx.strokeStyle = active ? '#7ea8ff' : 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = px(active ? 1.4 : 1);
+    ctx.beginPath(); ctx.roundRect(x, cy, segW, segH, px(6)); ctx.fill(); ctx.stroke();
+    const lab = tp.name + (tp.tuned ? '' : ' β');
+    label(lab, x + segW / 2, cy + segH / 2 + px(3.5), 10, active ? '#ffffff' : '#aeb9c6', 'center');
+    hit(x, cy, segW, segH, () => setTier(key));
+  }
+}
+
 function drawMenu() {
   drawScrim();
   const cx = W / 2;
   hudText('BLUE ORIGIN LANDINGS', cx, H * 0.16, 44, '#ffffff', 'center');
   hudText('land the New Glenn 7×2 · fly the heavier 9×4 · set Blue Moon MK1 down on the Moon', cx, H * 0.16 + px(28), 13.5, '#eef4f9', 'center');
 
+  drawTierToggle(cx, H * 0.16 + px(52));
+
   if (challenge) {
     const bnw = Math.min(px(560), W - px(40));
-    drawChallengeBanner(cx - bnw / 2, H * 0.16 + px(46), bnw, px(60));
+    drawChallengeBanner(cx - bnw / 2, H * 0.16 + px(80), bnw, px(60));
   }
 
   const bw = px(172), bh = px(180), gap = px(13), pad = px(7), thumbH = px(86);
