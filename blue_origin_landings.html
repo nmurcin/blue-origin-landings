@@ -3722,9 +3722,9 @@ function drawBooster() {
     // legs or telescoping outriggers that push straight down and slightly outward. Multiple per side.
     // When stowed they're inside the body; when deployed they slide/piston DOWN.
     const bodyW = vH * 0.065;          // body half-width at the aft skirt
-    const legExt = vH * 0.20 * e;     // how far the legs have extended (0 = stowed inside, full = out)
+    const legExt = vH * 0.05 * e;     // shrunk ~75% (was 0.20) — shorter extension
     const nLegs = 3;                   // 3 visible per side in the 2D view (6 total around the body)
-    const tubeW = 1.4;                 // tube thickness (world m) — chunky
+    const tubeW = 0.9;                 // tube thickness shrunk ~35% (was 1.4)
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
     for (const s of [-1, 1]) {
