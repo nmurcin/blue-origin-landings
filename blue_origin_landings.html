@@ -336,6 +336,9 @@ let CDA_AX   = 95;            // drag area, tail-first (fins + skirt)
 let CDA_LAT  = 195;           // drag area, broadside
 let RHO0     = 1.225, HSCALE = 8500;     // exponential atmosphere
 let FLIP_Y   = 3000;          // m, ship-mode landing-flip altitude
+// SHIP_MODE is LIVE (not dead): set true only in mars/MK1 (see startMode), where it switches the
+// aero + predictor to belly-stable-then-flip behavior. The !SHIP_MODE gates in stepPhysics and
+// predictTrajectory are load-bearing for the booster (ocean/tower) modes — do not remove them.
 let SHIP_MODE = false;        // true on Mars: belly-stable, flip to land
 let ASCENT_MODE = false;      // true during the moon launch/ascent (powered climb)
 const GATE_HALF = 450;        // m, entry gate half-width (Mars)
@@ -399,25 +402,6 @@ function drawTracedVehicle(key, H, yMax) {
   trace(s.outline);
   ctx.strokeStyle = 'rgba(20,24,30,0.45)'; ctx.lineWidth = Math.max(0.3, H * 0.004); ctx.stroke();
   ctx.restore();
-}
-// The four actuated control surfaces near the top of GS1 (drawn as an animated overlay on the
-// static traced booster so they pivot with the player's fin input). World-meter units, base at 0.
-function drawNGFins(finD, nEng) {
-  const W2 = 7.0, topY = -36;          // GS1 body half-width; fins sit just below the staging cut
-  for (const sgn of [-1, 1]) {
-    const span = 3.4, th = 1.2;
-    ctx.save();
-    ctx.translate(sgn * W2 / 2, topY);
-    ctx.rotate(finD);
-    const x0 = sgn > 0 ? 0 : -span;
-    ctx.fillStyle = '#cdd3da';
-    ctx.beginPath();
-    ctx.moveTo(x0, -th / 2); ctx.lineTo(x0 + span, -th * 0.2);
-    ctx.lineTo(x0 + span, th * 0.2); ctx.lineTo(x0, th / 2);
-    ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = 'rgba(25,30,34,0.5)'; ctx.lineWidth = 0.3; ctx.stroke();
-    ctx.restore();
-  }
 }
 // --- New Glenn descent control surfaces (Blue Origin public description: "four actuated
 // aerodynamic control surfaces" + wing-like strakes "to provide lift and cross-range … during
@@ -712,8 +696,9 @@ async function syncPilotFromSession() {
 // score physically achievable per mode (base + max fuel bonus + max precision), set safely
 // ABOVE the theoretical ceiling so a legit win is never silently dropped:
 //   ocean ceiling = 400 + 0.04·70000 + 350 = 3550 ; tower = 500 + 0.04·70000 + 410 = 3710
-//   mars  = 1200 + 0.05·9000 + 450 = 2100        ; moon  = 2500+600+700+700+450 = 4950
-const SCORE_MAX = { ocean: 3600, tower: 4650, mars: 3900, moon: 5000 };
+//   mars  ceiling = 1200 + 0.05·3000 + 250 + 200 = 1800 (FUEL0=3000; full-fuel is physically
+//   impossible for a powered descent, so real max is well under this) ; moon = 2500+600+700+700+450 = 4950
+const SCORE_MAX = { ocean: 3600, tower: 4650, mars: 2000, moon: 5000 };
 // Offensive callsigns to reject — base words only; leetspeak is normalized.
 const BLOCKED_WORDS = ['nigger','nigga','chink','gook','spic','kike','wetback',
   'coon','beaner','paki','towelhead','sandnigger','darkie','jigaboo','faggot',
@@ -1633,7 +1618,11 @@ function newRun(m) {
       y: (9800 + Math.random() * 300) * T().bAltMul,
       vx: (170 + Math.random() * 20) * T().bSpdMul,
       vy: 170 * (T().bSpdMul > 1 ? 0.5 : 1),   // higher tiers enter shallower (more horizontal)
-      ang: 45 * Math.PI / 180,   // stack attitude: prograde, nose up-range
+      // Boostback attitude: spawn leaning toward the deck (nose canted toward -x). Thrust adds
+      // ax = T·sin(ang)/m, and the booster starts at +x moving +vx (downrange), so the burn must
+      // push -x to walk vx back through zero and bring the predicted landing to the deck at x=0.
+      // A POSITIVE ang here would drive it further downrange — the wrong way for a boostback.
+      ang: -45 * Math.PI / 180,   // lean toward the deck so the boostback burn reduces vx
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -1714,7 +1703,7 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // 9×4 has STRONGER strake authority (user-requested belly-flop / high-AoA cross-range feel):
     // leaning the body flies it cross-range MORE than the 7×2, intentionally arcade-fun even if
     // not strictly realistic. The lift acts perpendicular to velocity (correct public aero rule).
-    const sk = mode === 'tower' ? STRAKE_K * 1.8 : STRAKE_K;
+    const sk = mode === 'tower' ? STRAKE_K * 1.35 : STRAKE_K;
     const Fstrake = sk * r * spd * spd * aoa * atmoT;
     ax += Fstrake * nxx / m;
     ay += Fstrake * nxy / m;
@@ -1790,9 +1779,8 @@ function predictTrajectory() {
   // Ship mode: pilot holds attitude, then flies a standard landing flip below
   // FLIP_Y, carrying whatever spin is real. Booster mode: no flip exists —
   // the pilot simply holds the current lean all the way down.
-  let mAng = b.ang;
-  const momW = Math.min(1, Math.max(0, (FLIP_Y + 400 - b.y) / 400));
-  let mAngv = Math.sign(b.angv) * Math.max(0, Math.abs(b.angv) - 0.12) * momW;
+  // (stepPhysics owns the attitude integration now, so there is no manual
+  // angle/angv override here — the removed mAng/mAngv/momW were dead.)
   for (let i = 0; i < 420; i++) {
     // stepPhysics ALREADY applies the weathercock, strake lift, and fin deflection to the state
     // (including s.ang and s.angv). So we NO LONGER manually override s.ang here — that was
@@ -2154,35 +2142,8 @@ function evalTouchdown() {
          'base ' + base + ' · fuel ' + fuelPts + ' · precision ' + precPts);
 }
 
-// the first criterion you blew, so a failed pass teaches instead of confusing
-function catchMissReason() {
-  const vDeg = Math.abs(b.ang * 180 / Math.PI);
-  if (Math.abs(b.x) > CATCH_HALF) return 'MISSED THE SLOT — ' + Math.abs(b.x).toFixed(1) + ' m off center';
-  if (-b.vy > TOWER_OK.vy) return 'TOO FAST — ' + (-b.vy).toFixed(1) + ' m/s at the arms';
-  if (Math.abs(b.vx) > TOWER_OK.vx) return 'DRIFTING — ' + Math.abs(b.vx).toFixed(1) + ' m/s sideways';
-  return 'TOO TILTED — ' + vDeg.toFixed(0) + '°';
-}
-
-function evalCatch() {
-  const vDeg = Math.abs(b.ang * 180 / Math.PI);
-  const ok = Math.abs(b.x) <= CATCH_HALF && -b.vy <= TOWER_OK.vy &&
-             Math.abs(b.vx) <= TOWER_OK.vx && vDeg <= TOWER_OK.ang;
-  if (!ok) return false;
-  const caughtVy = -b.vy, caughtX = Math.abs(b.x);
-  b.y = armY - PIN_OFFSET; b.vx = 0; b.vy = 0; b.angv = 0; b.ang = 0;
-  const lines = [
-    'Caught at       ' + caughtVy.toFixed(1) + ' m/s',
-    'Offset          ' + caughtX.toFixed(1) + ' m',
-    'Fuel left       ' + Math.round(b.fuel) + ' kg'
-  ];
-  const fuelPts = Math.round(b.fuel * 0.05);
-  const precPts = Math.round((1 - caughtX / CATCH_HALF) * 300 + (1 - vDeg / TOWER_OK.ang) * 150);
-  playClank();
-  shakeT = 0.25;
-  finish(true, 'MECHAZILLA HAS CAUGHT THE BOOSTER', lines, 800 + fuelPts + precPts,
-         'base 800 · fuel ' + fuelPts + ' · precision ' + precPts);
-  return true;
-}
+// (Removed: catchMissReason() and evalCatch() — the chopstick-catch evaluator and its failure
+// messages. NG 9×4 lands on Jacklyn via evalTouchdown(), so the catch path had zero call sites.)
 
 // Starship intro: rides the booster's nose, pops off, burns away to orbit
 function updateShip(dt) {
@@ -3375,116 +3336,14 @@ function drawTower() {
   // anywhere in this game, so skip all the catch overlays/arms (Blue has no Mechazilla).
   if (mode === 'moon') return;
   // (ocean/tower land at sea on Jacklyn, so the tower is never drawn for them either.)
-  return;
-
-  // ---- catch guidance, colored by what the arms need RIGHT NOW ----
-  const flying = (scene === 'flying' || scene === 'paused') && b;
-  const chk = flying ? {
-    slot: Math.abs(b.x) <= CATCH_HALF,
-    sink: b.vy < 0 && -b.vy <= TOWER_OK.vy,
-    drift: Math.abs(b.vx) <= TOWER_OK.vx,
-    tilt: Math.abs(b.ang * 180 / Math.PI) <= TOWER_OK.ang
-  } : null;
-  const ready = chk && chk.slot && chk.sink && chk.drift && chk.tilt;
-  const cc = (result && result.ok) || ready ? '#58d68d' : 'rgba(232,185,60,0.9)';
-  // soft catch window between the arms — THIS is where you bring the pins
-  const winG = ctx.createLinearGradient(0, w2sY(armY + 14), 0, armSy);
-  winG.addColorStop(0, ready ? 'rgba(88,214,141,0)' : 'rgba(232,185,60,0)');
-  winG.addColorStop(1, ready ? 'rgba(88,214,141,0.22)' : 'rgba(232,185,60,0.13)');
-  ctx.fillStyle = winG;
-  ctx.fillRect(w2sX(-CATCH_HALF), w2sY(armY + 14), w2sX(CATCH_HALF) - w2sX(-CATCH_HALF), armSy - w2sY(armY + 14));
-  // approach funnel: angled lips guiding into the slot mouth
-  ctx.strokeStyle = cc;
-  ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
-  ctx.lineWidth = 1.2 * devicePixelRatio;
-  for (const s of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(w2sX(s * CATCH_HALF * 2.1), w2sY(armY + 34));
-    ctx.lineTo(w2sX(s * CATCH_HALF), w2sY(armY + 14));
-    ctx.lineTo(w2sX(s * CATCH_HALF), w2sY(armY - 4));
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  // pin rail level — the line the pins must settle onto
-  ctx.strokeStyle = cc;
-  ctx.lineWidth = 2 * devicePixelRatio;
-  ctx.beginPath();
-  ctx.moveTo(w2sX(-CATCH_HALF), armSy);
-  ctx.lineTo(w2sX(CATCH_HALF), armSy);
-  ctx.stroke();
-  // (no permanent "Catch" label — the intro "Catch here" pointer covers it)
-  // carriage status: show that the arms are alive and meeting you
-  // (left of the tower — the booster body covers anything at the tower face)
-  if (flying && Math.abs(armY - ARM_Y) > 0.8) {
-    label('Arms tracking', xL - tm(2.5), armSy + px(3), 7.5, '#9fd8ff', 'right');
-  }
-  if (flying) {
-    const pinY = b.y + PIN_OFFSET;
-    const dPin = pinY - armY;
-    // pins → rails guide: a line at pin height with the gap left to close.
-    // This is the lesson the old HUD never taught: the PINS meet the RAILS.
-    if (Math.abs(b.x) < 45 && dPin > 1.5 && dPin < 70) {
-      const pSy = w2sY(pinY);
-      ctx.strokeStyle = ready ? 'rgba(88,214,141,0.8)' : 'rgba(232,185,60,0.65)';
-      ctx.setLineDash([3 * devicePixelRatio, 5 * devicePixelRatio]);
-      ctx.lineWidth = 1.2 * devicePixelRatio;
-      ctx.beginPath();
-      ctx.moveTo(w2sX(b.x - 8), pSy);
-      ctx.lineTo(w2sX(b.x + 8), pSy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      hudText('▼ ' + dPin.toFixed(0) + ' m', w2sX(b.x + 9) + px(4), pSy + px(4), 10,
-              ready ? '#58d68d' : '#e8b93c', 'left');
-    }
-    // descend-through-here chevrons while the booster is still above the rails
-    if (pinY > armY + 2) {
-      const ph = (performance.now() / 700) % 1;
-      ctx.strokeStyle = 'rgba(232,185,60,' + (0.75 * (1 - ph)).toFixed(2) + ')';
-      ctx.lineWidth = 1.6 * devicePixelRatio;
-      const cy2 = w2sY(armY + 11 - ph * 8);
-      ctx.beginPath();
-      ctx.moveTo(w2sX(-2.6), cy2 - px(5));
-      ctx.lineTo(w2sX(0), cy2);
-      ctx.lineTo(w2sX(2.6), cy2 - px(5));
-      ctx.stroke();
-    }
-  }
+  // NOTE: the old chopstick "catch guidance" overlay (catch window, approach funnel, pin-rail
+  // line, "Arms tracking" label, descent chevrons) used to live here behind a second unconditional
+  // return. It referenced an undefined `armSy` and would have thrown if ever reached — deleted.
 }
 
-// One chopstick of the pair. depth -1 = far side (behind the booster, a touch
-// higher), +1 = near side (in front, a touch lower). Open arms are rotated
-// toward/away from the camera, so they draw foreshortened until they close.
-function drawChopArm(depth) {
-  const reach = 50;   // the real arms are ~36 m of steel; ours read long too
-  const open = 1 - armClose;
-  const len = reach * (0.55 + 0.45 * armClose);
-  const baseY = armY + depth * 1.5;
-  const tipY = baseY + depth * open * 2.2;
-  ctx.fillStyle = depth < 0 ? '#4a545c' : '#6f7984';
-  ctx.beginPath();
-  ctx.moveTo(w2sX(TOWER_FACE), w2sY(baseY + 1.1));
-  ctx.lineTo(w2sX(TOWER_FACE), w2sY(baseY - 1.0));
-  ctx.lineTo(w2sX(TOWER_FACE + len), w2sY(tipY - 0.45));
-  ctx.lineTo(w2sX(TOWER_FACE + len), w2sY(tipY + 0.6));
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(15,19,23,0.75)';
-  ctx.lineWidth = Math.max(1, 0.3 * cam.s);
-  ctx.stroke();
-  // rail highlight along the top edge
-  ctx.strokeStyle = 'rgba(225,235,245,0.4)';
-  ctx.lineWidth = Math.max(1, 0.25 * cam.s);
-  ctx.beginPath();
-  ctx.moveTo(w2sX(TOWER_FACE), w2sY(baseY + 1.1));
-  ctx.lineTo(w2sX(TOWER_FACE + len), w2sY(tipY + 0.6));
-  ctx.stroke();
-}
-
-// near-side arm, rendered after the booster so she hangs between the pair
-function drawNearChopArm() {
-  // No chopstick catch anywhere in this game (Blue has no Mechazilla) — the 9×4 lands on Jacklyn
-  // at sea like the 7×2, so the near chopstick arm is never drawn.
-  return;
-}
+// (Removed: drawChopArm() and drawNearChopArm() — the far/near chopstick-arm renderers. No
+// chopstick catch exists in this game (Blue has no Mechazilla); the 9×4 lands on Jacklyn like
+// the 7×2, so both had zero live call sites.)
 
 // The EDL aim (predicted-impact ✕ + pad ✛) FADES IN as she commits belly-first into the
 // entry: ~0 right after the seamless hand-off (still high, maybe not yet belly), ramping to
@@ -3841,9 +3700,12 @@ function drawBooster() {
   const NG_H = 62, MK1_H = 18;
   // Landing legs function (called after the traced vehicle to overlay deployment animation).
   function drawLandingLegs(vH) {
-    // MK1: legs always deployed (it's descending the whole time). NG: deploy below ~380 m.
+    // MK1: legs always deployed (it's descending the whole time). NG: deploy only in the terminal
+    // vertical descent — low AND slow. Gating on altitude alone swung the legs out mid-glide while
+    // the booster was still screaming sideways toward Jacklyn; real boosters stow until nearly down.
     const alwaysOut = mode === 'mars';
-    const ext = alwaysOut ? 1.0 : Math.min(1, Math.max(0, (380 - b.y) / 200));
+    const nearVertical = Math.abs(b.vx) < 50;   // still flying cross-range → keep them stowed
+    const ext = alwaysOut ? 1.0 : ((b.y < 380 && nearVertical) ? Math.min(1, Math.max(0, (380 - b.y) / 200)) : 0);
     if (ext < 0.01) return;   // stowed = invisible
     const e = 1 - Math.pow(1 - ext, 2);   // ease-out (pneumatic feel)
     const legW = mode === 'mars' ? vH * 0.5 : vH * 0.14;   // how far out the foot reaches
@@ -4446,7 +4308,9 @@ function drawControlsLegend() {
   // [status text, status colour, key]
   const rows = [[orbital ? 'burn' : 'throttle', dim, 'SPACE'], ['steer', dim, '← →'], ['pause', dim, 'P']];
   if (mode === 'moon' && !orbital && !b.staged) rows.push(['stage', dim, 'B']);
-  if (mode === 'moon') {
+  if (mode === 'moon' || mode === 'mars') {
+    // MK1/moon both fly the WARP_STEPS ladder (X steps up, Z snaps back to ×1) — see the
+    // physics loop and mobile warpStep. The legend must match or the HUD lies about the controls.
     const wv = WARP_STEPS[warpIdx];   // one ladder, every stage; Z snaps back to ×1
     rows.push(['warp ' + fmtW(wv), wv > 1 ? amber : dim, 'X / Z']);
   } else {
@@ -5401,7 +5265,6 @@ function drawHUD() {
   if (inOrbitalPhase()) { drawOrbitHUD(); return; }
   drawHudPanel();                 // unified compact bottom-right panel (attitude + engines + speed + metrics)
   drawTimeline();
-  drawCatchChecklist();
   drawFlightChips();
   drawControlsLegend();           // key controls, top-right
 
@@ -5531,36 +5394,8 @@ function drawTimeline() {
   ctx.restore();
 }
 
-// Live catch checklist: the four things the arms need, green/red in real time
-function drawCatchChecklist() {
-  // Disabled: there is no chopstick catch in this game. NG 9×4 lands on the deck like the 7×2.
-  return;
-  if (mode !== 'tower' || (scene !== 'flying' && scene !== 'paused')) return;
-  const pinY = b.y + PIN_OFFSET;
-  if (!(pinY > armY - 4 && pinY < armY + 170 && Math.abs(b.x) < 90)) return;
-  const vDeg = Math.abs(b.ang * 180 / Math.PI);
-  const rows = [
-    ['Slot',  Math.abs(b.x).toFixed(1) + ' M',   Math.abs(b.x) <= CATCH_HALF],
-    ['Sink',  (-b.vy).toFixed(1) + ' M/S',       b.vy < 0 && -b.vy <= TOWER_OK.vy],
-    ['Drift', Math.abs(b.vx).toFixed(1) + ' M/S', Math.abs(b.vx) <= TOWER_OK.vx],
-    ['Tilt',  vDeg.toFixed(0) + '°',             vDeg <= TOWER_OK.ang]
-  ];
-  // phones: top-right corner, so it never covers the booster or telemetry
-  const pw = NARROW ? px(160) : px(180), ph2 = NARROW ? px(106) : px(118);
-  const x0 = NARROW ? W - pw - px(8) : W / 2 - pw / 2;
-  const y0 = NARROW ? px(36) : H - px(44) - ph2;
-  const ccx = x0 + pw / 2;
-  panel(x0, y0, pw, ph2);
-  label('Catch check', ccx, y0 + px(18), 9, '#8fa0ae', 'center');
-  let yy = y0 + px(38);
-  for (const r of rows) {
-    const c = r[2] ? '#58d68d' : '#ff6b4a';
-    label(r[0], x0 + px(14), yy, 8.5, '#76828c');
-    hudText(r[1], x0 + pw - px(34), yy, NARROW ? 10 : 11, c, 'right');
-    hudText(r[2] ? '✓' : '✗', x0 + pw - px(12), yy, NARROW ? 11 : 12, c, 'right');
-    yy += NARROW ? px(17) : px(20);
-  }
-}
+// (Removed: drawCatchChecklist() — the live Slot/Sink/Drift/Tilt catch panel. It was already
+// disabled with an early return; there is no chopstick catch, so the whole panel was dead.)
 
 // Attitude indicator: booster silhouette vs the horizon, 0° = upright.
 // compact (phone): white text, label right-aligned to the instrument's edge
@@ -6286,11 +6121,11 @@ function handleKeyPress(k) {
   } else if (scene === 'flying') {
     if (k === 'p' || k === 'P') { scene = 'paused'; silenceFlightAudio(); }
     else if ((k === 'x' || k === 'X')) {
-      if (mode === 'moon') warpIdx = Math.min(WARP_STEPS.length - 1, warpIdx + 1);   // warp UP one step (same ladder every stage)
+      if (mode === 'moon' || mode === 'mars') warpIdx = Math.min(WARP_STEPS.length - 1, warpIdx + 1);   // warp UP one step (same ladder every stage; MK1 needs it for the long Apollo descent)
       else timeScale = timeScale > 1 ? 1 : 2;
     }
     else if (k === 'z' || k === 'Z') {
-      if (mode === 'moon') warpIdx = 0;      // snap back to ×1
+      if (mode === 'moon' || mode === 'mars') warpIdx = 0;      // snap back to ×1
       else timeScale = 1;
     }
     else if (k === 'v' || k === 'V') {
@@ -6330,7 +6165,6 @@ function drawChaseScene() {
     drawShip();
     if (discard) drawDiscard();
     drawBooster();
-    drawNearChopArm();
     drawTargetPointer();
     drawMK1DistanceIndicator();
     drawLandingSiteMarker();      // belly phase: persistent green ✛ on the pad (edge-clamped + distance)
