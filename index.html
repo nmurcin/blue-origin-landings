@@ -460,8 +460,8 @@ const SPEED_OF_SOUND = 340;          // m/s, for the displayed Mach number
 // RCS propellant bank per vehicle (a SEPARATE small pool from the main engine fuel). Steering
 // spends it; when it's dry, attitude control falls back to aero fins only. Sized to scale — the
 // small MK1 lander carries far less. (kg, game-tuned.)
-const RCS0 = { ocean: 2200, tower: 2600, mars: 240, moon: 900 };
-const RCS_BURN = 40;                 // kg/s spent while steering at full input (scaled by |tqIn|)
+const RCS0 = { ocean: 600, tower: 700, mars: 80, moon: 400 };   // nerfed: RCS is limited, use it wisely
+const RCS_BURN = 55;                 // kg/s spent while steering at full input — burns fast now
 
 function applyModeParams(m) {
   // No mission belly-flops in this build: New Glenn lands engines-first; Blue Moon lands
