@@ -3737,7 +3737,8 @@ function drawBooster() {
     // When stowed they're inside the body; when deployed they slide/piston DOWN.
     const bodyW = vH * 0.04;           // tighter to the body center (legs exit close together)
     const legExt = vH * 0.05 * e;     // shrunk ~75% (was 0.20) — shorter extension
-    const nLegs = 3;                   // 3 visible per side in the 2D view (6 total around the body)
+    // Gen 1 (7×2) has 6 legs → 3 per side in 2D; Gen 2 (9×4 Kitsune) has 4 legs → 2 per side.
+    const nLegs = mode === 'tower' ? 2 : 3;
     const tubeW = 0.9;                 // tube thickness shrunk ~35% (was 1.4)
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
@@ -4224,8 +4225,15 @@ function flightHint() {
   else if (b.t < 0.55) hint = 'STAGE SEPARATION...';
   else if (b.t < 4 && Math.abs(b.angv) > 0.12) { hint = MOBILE ? 'TUMBLING — ' + MSTEER + ' against the spin' : 'TUMBLING — kill the spin with ← →'; warn = true; }
   else if (b.vx > 40) {
-    hint = Math.abs(b.vx) > 80 ? 'REENTRY BURN — point retrograde (' + STEER_K + '), hold ' + BURN_K + ' to bleed speed'
-                               : 'GLIDE — ride the strakes toward Jacklyn, steer the ✕ onto the target';
+    // Two-burn NG descent (DECEL → coast → LANDING): hint based on altitude + speed
+    if (b.y > T().entryY && Math.hypot(b.vx, b.vy) > 100)
+      hint = 'DECEL BURN — 3 engines retrograde (' + STEER_K + ' to aim), hold ' + BURN_K + ' to brake';
+    else if (b.y > 2500)
+      hint = 'COAST — ride the strakes toward Jacklyn, steer the ✕ onto the target';
+    else if (b.thr < 0.1)
+      hint = 'LANDING BURN — ' + BURN_K + ' NOW (3 engines → 1 for touchdown)';
+    else
+      hint = 'Set her on Jacklyn — under ' + landingSpec(mode).ok.vy + ' m/s, tilt < ' + landingSpec(mode).ok.ang + '°';
     warn = b.y < ENTRY_Y;
   }
   else if (b.y > ENTRY_Y) hint = vDeg > 25 ? 'COAST — swing tail-first (nose up) for entry' : 'COAST the arc — fine-trim the ✕ with short burns';
@@ -5380,10 +5388,10 @@ function drawTimeline() {
     { label: 'COAST',       from: 2500, to: 800,  frac: 0.30 },
     { label: 'DESCENT',     from: 800,  to: 0,    frac: 0.35 }
   ] : [
-    // NG booster: reentry burn to bleed speed, strake glide toward the deck, late landing burn
-    { label: 'ENTRY BURN', from: 14000, to: T().entryY, frac: 0.32 },
-    { label: 'STRAKE GLIDE', from: T().entryY, to: 1300, frac: 0.44 },
-    { label: 'LAND', from: 1300, to: 0, frac: 0.24 }
+    // NG two-burn descent (from internal NG GNC profile): DECEL burn → coast/control → LANDING burn
+    { label: 'DECEL BURN', from: 14000, to: T().entryY, frac: 0.25 },   // 3-engine reentry brake
+    { label: 'COAST/CTRL', from: T().entryY, to: 2500, frac: 0.35 },    // strake glide + attitude control
+    { label: 'LAND (3→1)', from: 2500, to: 0, frac: 0.40 }
   ];
   // on phones the timeline hugs the left edge and stops above the chips
   const tx = NARROW ? px(18) : px(30);
@@ -5807,7 +5815,7 @@ function drawMenu() {
   hudText('HOW TO FLY', L, ty, 14, '#e8b93c'); ty += px(24);
   const steps = [
     'Steer ← →.   Burn: hold SPACE / ↑.   Fast-forward: X.   Pause: P.',
-    'NG 7×2 / 9×4: bleed speed with a reentry burn, ride the strakes toward Jacklyn, then one late burn.',
+    'NG 7×2 / 9×4: DECEL burn (3 engines) to brake, coast on strakes toward Jacklyn, LANDING burn (3→1 engine).',
     '9×4 is heavier + steeper — lean into the strakes for cross-range (it flies like a lifting body).',
     'Blue Moon MK1: brake retrograde against your velocity, coast, then a vertical suicide burn.',
     'Fuel + precision = score.  RCS is a separate tank — use it wisely.'
@@ -5872,7 +5880,7 @@ function drawMenuNarrow() {
   hudText('HOW TO FLY', x0 + px(16), y + px(22), 12.5, '#e8b93c');
   const steps = [
     MOBILE ? 'Steer: drag the dot.  Burn: hold the button.' : 'Steer ← →.  Burn: hold SPACE / ↑.',
-    'NG: reentry burn to bleed speed, strake-glide to Jacklyn, one late burn.',
+    'NG: decel burn (3 eng) → strake coast → landing burn (3→1 eng) on Jacklyn.',
     'MK1: brake retrograde, coast, vertical suicide burn.  RCS is separate fuel.'
   ];
   let mfs = 10.5; const mMaxW = bw - px(32);   // shrink uniformly so no step overruns the narrow box
