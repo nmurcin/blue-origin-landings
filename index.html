@@ -1584,19 +1584,17 @@ function newRun(m) {
     return;
   }
   if (m === 'mars') {
-    // BLUE MOON MK1 — Apollo-style powered descent from low lunar orbit (compressed for the game).
-    // Like the real LM descent: arrive FAST and mostly HORIZONTAL (engine retrograde to brake),
-    // the player brakes to kill horizontal velocity, then pitches vertical for a terminal hover-
-    // slam. Vacuum, 1/6 g — no aero; all control is engine thrust + RCS attitude. Approach from
-    // one side so the player flies the full PDI→pitchover→terminal profile (the signature Apollo
-    // trajectory shape). Fuel is tight — manage it or you're too fast at the surface.
-    const dir = Math.random() < 0.5 ? 1 : -1;
+    // BLUE MOON MK1 — Apollo-style powered descent from low lunar orbit. The landing site (a south-
+    // pole crater floor with water ice) is FAR to the LEFT at x=0. The lander spawns ~15 km to the
+    // RIGHT, flying LEFTWARD at orbital-derived velocity. The player brakes retrograde to kill speed,
+    // coasts the long arc, pitches vertical for the terminal hover-slam into the crater. The HUD
+    // shows a distance indicator + arrow pointing LEFT toward the target.
     b = {
-      x: -dir * (4200 + Math.random() * 600),   // approach from ~4-5 km out
-      y: 5000 + Math.random() * 500,            // ~5 km altitude (PDI-scale, compressed)
-      vx: dir * (380 + Math.random() * 40),     // fast horizontal (needs retrograde braking)
-      vy: -18 - Math.random() * 6,              // slight descent rate (builds under 1/6 g)
-      ang: -dir * (55 * Math.PI / 180),         // tilted ~55° from vertical (engine partly retrograde)
+      x: 15000 + Math.random() * 1000,          // ~15 km to the RIGHT of the landing site
+      y: 5000 + Math.random() * 500,            // ~5 km altitude (PDI-scale)
+      vx: -(340 + Math.random() * 40),          // fast LEFTWARD (toward the landing site at x=0)
+      vy: -12 - Math.random() * 5,              // slight descent rate (builds under 1/6 g)
+      ang: 55 * Math.PI / 180,                  // tilted ~55° from vertical (engine partly retrograde = to the RIGHT)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -3710,6 +3708,31 @@ function drawTargetPointer() {
   ctx.restore();
 }
 
+// MK1 persistent distance indicator: an arrow + "X.X km" pointing toward the landing site (x=0)
+// when it's off-screen. Shows the whole descent so the player always knows where the target is.
+function drawMK1DistanceIndicator() {
+  if (mode !== 'mars' || !b || scene !== 'flying') return;
+  const dist = Math.abs(b.x);   // landing site is at x=0
+  if (dist < 200) return;       // close enough — the pad is on screen
+  const onScreenX = w2sX(0);
+  if (onScreenX >= px(20) && onScreenX <= W - px(20)) return;   // target visible, no indicator needed
+  const side = b.x > 0 ? -1 : 1;   // target is to the LEFT if b.x > 0
+  const ix = side < 0 ? px(30) : W - px(30);
+  const iy = H * 0.28;
+  // arrow pointing toward the target
+  ctx.save();
+  ctx.fillStyle = '#7ee0a8'; ctx.strokeStyle = '#7ee0a8'; ctx.lineWidth = px(2); ctx.lineCap = 'round';
+  const aLen = px(18);
+  ctx.beginPath();
+  ctx.moveTo(ix, iy); ctx.lineTo(ix - side * aLen, iy - px(6)); ctx.moveTo(ix, iy); ctx.lineTo(ix - side * aLen, iy + px(6));
+  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ix, iy - px(1.5)); ctx.lineTo(ix, iy + px(1.5)); ctx.lineTo(ix + side * px(4), iy); ctx.closePath(); ctx.fill();
+  // distance label
+  const txt = dist >= 1000 ? (dist / 1000).toFixed(1) + ' km' : Math.round(dist) + ' m';
+  hudText('LANDING SITE  ' + txt, ix - side * px(24), iy + px(4), 11, '#7ee0a8', side < 0 ? 'left' : 'right');
+  ctx.restore();
+}
+
 // Persistent LANDING-SITE marker through the whole belly phase: a green ✛ target on the
 // pad so you always know which way / how far it is (it's far below during the high
 // belly-flop, so the marker clamps to the screen edge with the distance). Same green as
@@ -5792,7 +5815,8 @@ function drawModeThumb(m, x, y, w, h, locked) {
     const dw = w * 0.46, dx2 = cx - dw / 2, dy = sea - px(3);
     ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx2, dy, dw, px(7));   // Jacklyn deck
     // traced vehicle (GS1 only)
-    ctx.save(); ctx.translate(cx, dy - px(2)); ctx.scale(px(1.1), px(1.1));
+    const vs = h * 0.006;   // DPR-independent vehicle scale (fills ~60% of the thumbnail)
+    ctx.save(); ctx.translate(cx, dy - px(2)); ctx.scale(vs, vs);
     drawTracedVehicle('ng7x2', 62, 0.588);
     ctx.restore();
   } else if (m === 'tower') {                            // 2 — New Glenn 9×4: steeper approach
@@ -5804,7 +5828,8 @@ function drawModeThumb(m, x, y, w, h, locked) {
     const dw = w * 0.40, dx2 = cx + px(2) - dw / 2, dy = sea - px(3);
     ctx.fillStyle = '#1c2a33'; ctx.fillRect(dx2, dy, dw, px(7));   // smaller Jacklyn deck
     // traced vehicle, tilted (steep approach)
-    ctx.save(); ctx.translate(cx + px(2), dy - px(2)); ctx.rotate(0.22); ctx.scale(px(1.0), px(1.0));
+    const vs2 = h * 0.006;
+    ctx.save(); ctx.translate(cx + px(2), dy - px(2)); ctx.rotate(0.22); ctx.scale(vs2, vs2);
     drawTracedVehicle('ng9x4', 62, 0.540);
     ctx.restore();
   } else if (m === 'mars') {                             // 3 — Blue Moon MK1 on the lunar surface
@@ -5818,7 +5843,8 @@ function drawModeThumb(m, x, y, w, h, locked) {
     gg.addColorStop(0, '#75787d'); gg.addColorStop(1, '#2c2e32');
     ctx.fillStyle = gg; ctx.fillRect(x, gy, w, y + h - gy);   // gray regolith
     // traced MK1 lander
-    ctx.save(); ctx.translate(cx, gy - px(2)); ctx.scale(px(2.8), px(2.8));
+    const vs3 = h * 0.014;   // MK1 is squat/wide, needs a bigger scale to fill the card
+    ctx.save(); ctx.translate(cx, gy - px(2)); ctx.scale(vs3, vs3);
     drawTracedVehicle('mk1', 18);
     ctx.restore();
   } else {                                               // 4 — Blue Moon MK2: the trajectory to the Moon
@@ -6321,6 +6347,7 @@ function drawChaseScene() {
     drawBooster();
     drawNearChopArm();
     drawTargetPointer();
+    drawMK1DistanceIndicator();
     drawLandingSiteMarker();      // belly phase: persistent green ✛ on the pad (edge-clamped + distance)
     drawAscentGuide();            // launch gravity-turn guide (no-op in orbit)
     drawOrbitDirector();          // orbital BURN/PROGRADE director (no-op on launch)
@@ -6337,21 +6364,20 @@ function frame(now) {
   syncWakeLock();
   if (scene === 'paused') dt = 0;
   if (scene === 'flying' && !inOrbitalPhase()) {
-    if (mode === 'moon') {
+    if (mode === 'moon' || mode === 'mars') {
       // unified manual warp (same WARP_STEPS ladder as space). Engine/RCS input still
-      // pulls warp DOWN so the active bits are flown live — but only to the SAME floor as
-      // space: on the powered CLIMB (launch/ascent) it drops to ×10 (WARP_SPACE_DROP), so
-      // the ascent is time-warpable exactly like orbit; during the EDL (reentry/flip/land)
-      // it drops all the way to ×1 (warping toward the ground = an unrecoverable crash).
+      // pulls warp DOWN so the active bits are flown live. For mars (MK1 Apollo descent),
+      // the long coast benefits from the full warp ladder; it snaps back to ×1 when you
+      // start burning/steering so the active landing is real-time.
       const burning = keys[' '] || keys['ArrowUp'] || burnHeld;
       const steering = keys['ArrowLeft'] || keys['ArrowRight'] ||
                        (MOBILE && Math.abs(steerVal) > 0.15);
-      const edl = b.phase === 'lunardesc';
+      const edl = b.phase === 'lunardesc' || mode === 'mars';
       const floorIdx = edl ? 0 : WARP_SPACE_DROP;
       if ((burning || steering) && warpIdx > floorIdx) warpIdx = floorIdx;
       if (warpIdx > 0) dt *= WARP_STEPS[warpIdx];
     } else if (timeScale > 1) {
-      if (b.y < (SHIP_MODE ? FLIP_Y + 600 : 3500)) timeScale = 1;   // other modes hand control back in time
+      if (b.y < 3500) timeScale = 1;   // NG boosters hand control back near the deck
       else dt *= timeScale;
     }
   }
