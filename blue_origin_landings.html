@@ -1687,25 +1687,29 @@ function stepPhysics(s, dt, thr, tq, fin) {
     ay += (Fax * axy + Fno * nxy) / m;
   }
   if (!SHIP_MODE && !ASCENT_MODE && r > 0) {
-    // New Glenn descent control surfaces (replaces Falcon's grid fins):
-    //   FINS — four actuated control surfaces. Continuous, smooth control lift in the steer
-    //   direction (no waffle-grid stall lockout). Scales with deflection finD, like a gimbal.
-    if (finD) {
-      const Ffin = FIN_K * r * spd * spd * finD * atmoT;
-      ax += Ffin * nxx / m;
-      ay += Ffin * nxy / m;
-    }
-    //   STRAKES — always on, even at zero stick: a passive lift bias set by angle of attack
-    //   (signed normal-flow fraction). Net lift with no input lets a flatter, higher-AoA glide
-    //   carry the booster farther downrange/cross-range — the core New Glenn descent mechanic.
+    // STRAKE LIFT — the core New Glenn descent mechanic. The strakes generate lift PERPENDICULAR
+    // TO THE VELOCITY VECTOR (not the body normal). The DIRECTION of lift is determined by the
+    // sign of the angle of attack: tilt the body one way → lift pushes the flight path that way.
+    // This is how real lifting-body / winged reentry works: you STEER by rotating the body
+    // (changing AoA), which redirects where the aerodynamic lift vector points.
+    //
+    // The FINS do NOT apply a direct lateral force (that was wrong — it made steering feel like
+    // lateral thrusters instead of aerodynamic control). Fins only contribute to TORQUE (rotation)
+    // via the tqEff term above, which changes the body angle, which changes AoA, which redirects
+    // the strake lift. This is physically correct for lifting surfaces.
     const aoa = spd > 1 ? (vno / spd) : 0;
-    // 9×4 has STRONGER strake authority (user-requested belly-flop / high-AoA cross-range feel):
-    // leaning the body flies it cross-range MORE than the 7×2, intentionally arcade-fun even if
-    // not strictly realistic. The lift acts perpendicular to velocity (correct public aero rule).
     const sk = mode === 'tower' ? STRAKE_K * 1.35 : STRAKE_K;
+    // Lift perpendicular to velocity: compute the unit vector perpendicular to the velocity
+    // (pointing "up" relative to the flight path = the lift direction for positive AoA).
+    // For a body tilted to have its belly face one side, lift pushes AWAY from the belly.
+    const lvx = -vy / spd, lvy = vx / spd;   // unit vector perpendicular to velocity (rotated 90° CCW)
+    // Sign: positive AoA (body tilted so nose is "above" the flight path) → lift in the +perp direction.
+    // For our coordinate system: if the body is leaned RIGHT of the velocity vector, AoA is positive,
+    // and lift pushes the path to the RIGHT (toward where the body is leaning). This is the "bank to
+    // turn" principle — lean the body the way you want to go.
     const Fstrake = sk * r * spd * spd * aoa * atmoT;
-    ax += Fstrake * nxx / m;
-    ay += Fstrake * nxy / m;
+    ax += Fstrake * lvx / m;
+    ay += Fstrake * lvy / m;
   }
 
   // rotation: player torque (+gimbal when burning), aero damping.
