@@ -476,7 +476,7 @@ function applyModeParams(m) {
     // = 9.75 kg/s. Lunar TWR ≈ 1.65 at 16.5 t; 20% min-throttle TWR ≈ 0.33.
     G = 1.62; RHO0 = 0; HSCALE = 50000;
     ENTRY_Y = 0; FLIP_Y = 0;
-    DRY_MASS = 7500; FUEL0 = 9000;
+    DRY_MASS = 7500; FUEL0 = 1200;        // drastically cut — ~123 s full-burn budget (manage it!)
     THRUST = 4.4e4; MDOT = 9.75;
     CDA_AX = 0; CDA_LAT = 0;               // vacuum — no aero
   } else if (m === 'moon') {
@@ -2776,6 +2776,21 @@ function curveOff(wx) {
 
 // ---------- Drawing ----------
 function drawSky() {
+  // MK1 lunar descent: the Moon has no atmosphere — BLACK sky with stars and Earth as a prop.
+  if (mode === 'mars') {
+    ctx.fillStyle = '#04060c'; ctx.fillRect(0, 0, W, H);
+    // always-on starfield
+    ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    for (const s of stars) {
+      const sx = w2sX(s.x * 0.4 + cam.x * 0.6), sy = w2sY(s.y);
+      if (sx > -5 && sx < W + 5 && sy > -5 && sy < H + 5)
+        ctx.fillRect(sx, sy, s.r * devicePixelRatio, s.r * devicePixelRatio);
+    }
+    // Earth as a background prop (small, upper-right area)
+    const erx = W - px(80), ery = px(80), esz = px(28);
+    drawEarthDisk(erx, ery, esz);
+    return;
+  }
   const h = b ? b.y : 18000;
   const t = Math.min(1, Math.max(0, 1 - h / 24000)); // 0 = space, 1 = sea level
   // three-stop scattering gradient: dark zenith, mid sky, pale bright horizon.
@@ -3158,17 +3173,15 @@ function drawGround() {
     ctx.beginPath();
     ctx.ellipse(w2sX(0), gy + pm(0.6), pm(12), pm(0.5), 0, 0, Math.PI * 2);
     ctx.stroke();
-    // the base: domes, hab module, antenna
-    ctx.fillStyle = 'rgba(205,212,217,0.92)';
-    ctx.beginPath(); ctx.ellipse(w2sX(150), gy, pm(24), pm(15), 0, Math.PI, 0); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(w2sX(192), gy, pm(13), pm(9), 0, Math.PI, 0); ctx.fill();
-    ctx.fillStyle = '#8e959b';
-    ctx.fillRect(w2sX(210), gy - pm(7), pm(34), pm(7));
-    ctx.strokeStyle = 'rgba(220,226,230,0.85)';
-    ctx.lineWidth = Math.max(1, 0.35 * cam.s);
-    ctx.beginPath();
-    ctx.moveTo(w2sX(252), gy); ctx.lineTo(w2sX(252), gy - pm(22));
-    ctx.stroke();
+    // craters (decorative depressions in the regolith — harder to land near the rim)
+    ctx.strokeStyle = 'rgba(50,55,62,0.6)'; ctx.lineWidth = Math.max(1, 0.4 * cam.s);
+    for (const [cx2, r, d] of [[85, 22, 4], [-110, 35, 6], [200, 14, 3], [-60, 10, 2], [280, 28, 5]]) {
+      const scx = w2sX(cx2), scr = pm(r);
+      if (scx < -scr || scx > W + scr) continue;   // off-screen cull
+      ctx.beginPath(); ctx.ellipse(scx, gy + pm(d * 0.4), scr, pm(d * 0.8), 0, 0, Math.PI); ctx.stroke();
+      ctx.fillStyle = 'rgba(30,32,36,0.25)';
+      ctx.beginPath(); ctx.ellipse(scx, gy + pm(d * 0.4), scr * 0.9, pm(d * 0.5), 0, 0, Math.PI); ctx.fill();
+    }
     // scattered rocks, world-anchored
     if (cam.s > 0.45) {
       const viewW = W / cam.s;
