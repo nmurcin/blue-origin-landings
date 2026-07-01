@@ -410,7 +410,19 @@ function drawTracedVehicle(key, H, yMax) {
 // low-AR lift-curve slope ≈ 2.9 /rad. The constants are then tuned so the strakes' always-on lift
 // stretches the glide (matching the public ~600–1000 km downrange landing reach). NOT real specs.
 const FIN_K    = 26;          // actuated-fin control lift coefficient (player-steered, continuous)
-const STRAKE_K = 75;          // strake passive-lift coefficient (STRONGER — more body lift for cross-range glide)
+const STRAKE_K = 75;          // strake passive-lift coefficient (legacy; kept for reference/tower multiplier)
+// FLAT-PLATE STRAKE LIFT constants (rewritten model — see stepPhysics ~line 1689).
+// The old model used CL = aoa = vno/spd (= sin β) applied LINEARLY, which never stalled and
+// grew as the body tilted toward broadside — so aligning the body with the flow (going vertical
+// in a vertical fall) INCREASED cross-range push, the exact opposite of a real wing. The rewrite
+// uses a Newtonian flat-plate CL = sin(β)·cos(β) = ½·sin(2β): ZERO lift when aligned (β=0) AND
+// broadside/stalled (β=90°), PEAK near a 45–55° belly-flop lean. Values below were calibrated by
+// full-trajectory integration (~8–10 km downrange reach from an ~11 km Mach-class entry).
+const CL_K         = 120;     // flat-plate lift scale. NOT a drop-in for STRAKE_K=75 — the force FORM
+                              //   changed from (spd·aoa) to (spd²·sinβ·cosβ), so this is re-calibrated.
+const GLIDE_K      = 0.15;    // tiny along-velocity L/D bonus (|Flift|-gated so it only EXTENDS glide,
+                              //   never reverses). WAS 0.90 — that behaved like a prograde THRUSTER (bug).
+const LIFT_CLAMP_G = 1.2;     // lift ceiling as a multiple of weight (m·G) — keeps it aero, not rocket.
 // (Tuned via local/scripts/bo_landings_glide_check.py: gives New Glenn a wider downrange reach
 //  window than the old grid-fin booster and a ~2.4 km steerable spread, while staying stable.)
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
@@ -597,7 +609,12 @@ function moonStage(stage) {
 
 const HEAT_TOL_BELLY = 7.0e7; // rho*v^3 the heat shield tolerates
 const HEAT_TOL_BARE  = 1.4e7; // tolerance with the wrong side forward
-const HEAT_DMG_DIV   = 1.2e6; // damage rate divisor
+const HEAT_DMG_DIV   = 6.0e5; // damage rate divisor (lowered from 1.2e6 so the decel burn is TRULY
+                              // mandatory: after the flat-plate lift fix removed the old prograde
+                              // "thruster" push, a bare no-decel glide peaked ~1.8-2.0x tol but no
+                              // longer accumulated enough damage to burn up. Faster damage accrual
+                              // restores burn-up without a decel burn, while the brief with-decel
+                              // exposure (~1.4x tol) still survives. Verified in scripts/test_physics.py.
 // Orbital-frame (hypersonic) reentry heating — much higher q than the subsonic flat-frame numbers
 // above. A belly-first corridor entry peaks ~50e7, so the belly shield must tolerate that; edge-on
 // exposes the bare side at a far lower tolerance, so over-steering into peak heating BURNS you.
@@ -1686,39 +1703,48 @@ function stepPhysics(s, dt, thr, tq, fin) {
     ax += (Fax * axx + Fno * nxx) / m;
     ay += (Fax * axy + Fno * nxy) / m;
   }
-  if (!SHIP_MODE && !ASCENT_MODE && r > 0) {
-    // STRAKE LIFT — the core New Glenn descent mechanic. The strakes generate lift PERPENDICULAR
-    // TO THE VELOCITY VECTOR (not the body normal). The DIRECTION of lift is determined by the
-    // sign of the angle of attack: tilt the body one way → lift pushes the flight path that way.
-    // This is how real lifting-body / winged reentry works: you STEER by rotating the body
-    // (changing AoA), which redirects where the aerodynamic lift vector points.
+  if (!SHIP_MODE && !ASCENT_MODE && r > 0 && spd > 1) {
+    // STRAKE LIFT — the core New Glenn descent mechanic, as a FLAT-PLATE / Newtonian lifting
+    // surface. The strakes generate lift PERPENDICULAR TO THE VELOCITY VECTOR (not the body
+    // normal). You STEER by rotating the body (changing angle of attack), which redirects the
+    // aerodynamic lift vector — real lifting-body / winged-reentry behavior. The FINS do NOT apply
+    // a direct lateral force (that felt like thrusters); fins only add TORQUE via tqEff above,
+    // which changes the body angle → changes AoA → redirects this lift.
     //
-    // The FINS do NOT apply a direct lateral force (that was wrong — it made steering feel like
-    // lateral thrusters instead of aerodynamic control). Fins only contribute to TORQUE (rotation)
-    // via the tqEff term above, which changes the body angle, which changes AoA, which redirects
-    // the strake lift. This is physically correct for lifting surfaces.
-    const aoa = spd > 1 ? (vno / spd) : 0;
-    const sk = mode === 'tower' ? STRAKE_K * 1.35 : STRAKE_K;
-    // Lift perpendicular to velocity: compute the unit vector perpendicular to the velocity
-    // (pointing "up" relative to the flight path = the lift direction for positive AoA).
-    // For a body tilted to have its belly face one side, lift pushes AWAY from the belly.
-    const lvx = -rvy / spd, lvy = rvx / spd;  // unit vector perpendicular to velocity (rotated 90° CCW)
-    // Sign: positive AoA (body tilted so nose is "above" the flight path) → lift in the +perp direction.
-    // For our coordinate system: if the body is leaned RIGHT of the velocity vector, AoA is positive,
-    // and lift pushes the path to the RIGHT (toward where the body is leaning). This is the "bank to
-    // turn" principle — lean the body the way you want to go.
-    const Fstrake = sk * r * spd * spd * aoa * atmoT;
-    // Primary lift: perpendicular to velocity (correct aerodynamics)
-    ax += Fstrake * lvx / m;
-    ay += Fstrake * lvy / m;
-    // Glide extension: a fraction of the lift acts ALONG the velocity direction (like an L/D
-    // ratio > 1 — the strakes don't just lift, they also reduce effective drag at moderate AoA,
-    // letting the booster fly FURTHER in the direction it's going). This gives the "point it
-    // where you want to go and it flies there" feel. Scales with AoA: best at moderate lean.
-    const glideK = 0.90;   // 90% of lift also pushes along velocity (L/D effect) — strong glider-like reach
-    const fvx = rvx / spd, fvy = rvy / spd;   // unit vector along velocity
-    ax += Fstrake * glideK * fvx / m;
-    ay += Fstrake * glideK * fvy / m;
+    // FLAT-PLATE PHYSICS. β = angle between the body axis and the relative wind. vno/spd IS
+    // sin(β) already (the flow component on the plate face), signed by which side the belly faces.
+    //   CL = sin(β)·cos(β) = ½·sin(2β)
+    //     • β = 0  (body ALIGNED with the flow — nose/tail into the wind, no wing): CL = 0 → the
+    //              booster falls STRAIGHT along the flow. Pointing a vertical body into a vertical
+    //              fall now KILLS cross-range push (the previous model did the backwards thing).
+    //     • β ≈ 45–55° (belly-flop trim):                                  CL peaks → strongest glide.
+    //     • β → 90° (broadside / stalled as a lifting surface):            CL → 0 → steering dies,
+    //              only the crossflow DRAG term (Fno above) acts.
+    // Using vno/spd for sin(β) folds nose/tail together (a plate is front/back symmetric), so CL is
+    // continuous through broadside and the sign is carried cleanly by sin(β) — no stall-branch, no
+    // discontinuity. Sign check (coords: +x right, +y up, ang=0 = nose up): lean the nose RIGHT of
+    // the flight path and CL·lv points +x → the path curves RIGHT, toward the lean. "Bank to turn":
+    // lean the body the way you want to go. (Verified numerically against a vertical-fall case.)
+    const spdS = spd;
+    let sinB = vno / spdS;                                  // signed sin(β); vno computed above
+    if (sinB >  1) sinB =  1; else if (sinB < -1) sinB = -1;
+    const cosB = Math.sqrt(Math.max(0, 1 - sinB * sinB));
+    const CL   = sinB * cosB;                               // = ½·sin(2β), sign carried by sinB
+    const clk  = (mode === 'tower' ? CL_K * 1.35 : CL_K);   // keep the tower lift multiplier
+    let Flift  = clk * r * spdS * spdS * CL * atmoT;
+    // Clamp so runaway dynamic pressure can't turn lift into a thruster — cap at a fraction of weight.
+    const cap  = LIFT_CLAMP_G * m * G;
+    if (Flift >  cap) Flift =  cap; else if (Flift < -cap) Flift = -cap;
+    // Primary lift: perpendicular to velocity, +90° CCW basis (-vy, vx)/spd; CL's sign picks the side.
+    const lvx = -rvy / spdS, lvy = rvx / spdS;
+    ax += Flift * lvx / m;
+    ay += Flift * lvy / m;
+    // Small along-velocity L/D bonus: uses |Flift| so it only ever EXTENDS the glide, never
+    // reverses it, and stays tiny vs the perpendicular lift. This is the ONLY along-flow term —
+    // the old glideK=0.90 prograde push was a thruster bug and is intentionally deleted.
+    const fvx = rvx / spdS, fvy = rvy / spdS;
+    ax += Math.abs(Flift) * GLIDE_K * fvx / m;
+    ay += Math.abs(Flift) * GLIDE_K * fvy / m;
   }
 
   // rotation: player torque (+gimbal when burning), aero damping.

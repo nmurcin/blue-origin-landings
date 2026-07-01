@@ -32,12 +32,19 @@ VEHICLES = {
 }
 STRAKE_K = 75
 FIN_K = 26
+# FLAT-PLATE STRAKE LIFT constants (must match the HTML, see stepPhysics ~line 1701).
+# CL = sin(beta)*cos(beta) = 1/2*sin(2*beta): ZERO lift when body is aligned with the flow
+# (beta=0) AND at broadside/stall (beta=90deg), PEAK near a 45-55deg belly-flop lean.
+CL_K = 120           # flat-plate lift scale (HTML const CL_K)
+GLIDE_K = 0.15       # tiny along-velocity L/D bonus, |Flift|-gated (HTML const GLIDE_K)
+LIFT_CLAMP_G = 1.2   # lift ceiling as a multiple of weight m*G (HTML const LIFT_CLAMP_G)
 RCS0 = {'ocean': 600, 'tower': 700, 'mars': 2000}
 RCS_BURN = 55
 # heat model (matches the game): q3 = rho*v^3*hRamp; burn up if damage >= 100
 HEAT_TOL_BELLY = 7.0e7
 HEAT_TOL_BARE = 1.4e7
-HEAT_DMG_DIV = 1.2e6
+HEAT_DMG_DIV = 6.0e5  # matches HTML: lowered from 1.2e6 so the decel burn stays mandatory after
+                      # the flat-plate lift fix removed the old prograde push (see HTML comment).
 ENTRY_Y = 8500
 
 
@@ -75,14 +82,25 @@ def sim_landing(mode, verbose=False):
             Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
             ax += (Fax * axx + Fno * nxx) / m
             ay += (Fax * axy + Fno * nxy) / m
-            aoa = (vno / sp) if sp > 1 else 0
-            Fs = SK * r * sp * sp * aoa * atmoT
-            # lift perpendicular to velocity + glide-extension along velocity (matches the game)
-            glideK = 0.90
-            lvx, lvy = -vy / sp, vx / sp        # perpendicular to velocity
-            fvx, fvy = vx / sp, vy / sp          # along velocity
-            ax += Fs * lvx / m + Fs * glideK * fvx / m
-            ay += Fs * lvy / m + Fs * glideK * fvy / m
+            # FLAT-PLATE STRAKE LIFT (matches the game stepPhysics after the fix):
+            # CL = sin(beta)*cos(beta), sign carried by sinB=vno/spd. Lift acts PERPENDICULAR
+            # to the velocity vector; a tiny |Flift|-gated along-velocity glide bonus extends
+            # (never reverses) the glide. SK's tower multiplier is folded into clk below.
+            if sp > 1:
+                sinB = max(-1.0, min(1.0, vno / sp))
+                cosB = math.sqrt(max(0.0, 1 - sinB * sinB))
+                CL = sinB * cosB
+                clk = CL_K * v.get('STRAKE_MULT', 1.0)
+                Flift = clk * r * sp * sp * CL * atmoT
+                cap = LIFT_CLAMP_G * m * G
+                if Flift > cap:
+                    Flift = cap
+                elif Flift < -cap:
+                    Flift = -cap
+                lvx, lvy = -vy / sp, vx / sp        # perpendicular to velocity (+90 CCW)
+                fvx, fvy = vx / sp, vy / sp          # along velocity
+                ax += Flift * lvx / m + abs(Flift) * GLIDE_K * fvx / m
+                ay += Flift * lvy / m + abs(Flift) * GLIDE_K * fvy / m
 
         # AUTOPILOT: mode-appropriate strategy
         stop_dist = vy * vy / (2 * max(0.01, THR / m - G)) if THR / m > G else 1e9
@@ -176,10 +194,21 @@ def _sim_heat(mode, do_decel):
         Fax = -0.5 * r * CDA_AX * abs(vax) * vax
         Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
         ax = (Fax * axx + Fno * nxx) / m; ay = -G + (Fax * axy + Fno * nxy) / m
-        aoa = vno / sp if sp > 1 else 0
-        Fs = SK * r * sp * sp * aoa * atmoT
-        ax += Fs * (-vy / sp) / m + Fs * 0.90 * (vx / sp) / m
-        ay += Fs * (vx / sp) / m + Fs * 0.90 * (vy / sp) / m
+        # FLAT-PLATE STRAKE LIFT (matches the fixed game): CL = sin(beta)*cos(beta),
+        # lift perpendicular to velocity + tiny |Flift|-gated glide bonus.
+        if sp > 1:
+            sinB = max(-1.0, min(1.0, vno / sp))
+            cosB = math.sqrt(max(0.0, 1 - sinB * sinB))
+            CL = sinB * cosB
+            clk = CL_K * v.get('STRAKE_MULT', 1.0)
+            Flift = clk * r * sp * sp * CL * atmoT
+            cap = LIFT_CLAMP_G * m * G
+            if Flift > cap:
+                Flift = cap
+            elif Flift < -cap:
+                Flift = -cap
+            ax += Flift * (-vy / sp) / m + abs(Flift) * GLIDE_K * (vx / sp) / m
+            ay += Flift * (vx / sp) / m + abs(Flift) * GLIDE_K * (vy / sp) / m
         if thr > 0 and fuel > 0:
             ax += THR * thr * math.sin(ang) / m; ay += THR * thr * math.cos(ang) / m
             fuel = max(0, fuel - MDOT * thr * dt)
@@ -208,6 +237,89 @@ def test_decel_burn_required():
               f"{'PASS' if good else 'FAIL'}")
         if not good:
             ok = False
+    return ok
+
+
+def _lift_ax(ang, vx, vy, r, m, G, CDA_ax_unused=None, strake_mult=1.0, atmoT=1.0):
+    """Return the HORIZONTAL acceleration contributed by STRAKE LIFT ALONE for a body at angle
+    `ang` in a relative wind (vx, vy). Mirrors the game's exact lift expression in stepPhysics:
+        axx,axy = sin(ang), cos(ang)      (body axis / nose)
+        nxx,nxy = axy, -axx               (body normal)
+        vno     = vx*nxx + vy*nxy         (flow component on the plate face)
+        sinB    = clamp(vno/spd, -1, 1);  cosB = sqrt(1 - sinB^2)
+        CL      = sinB*cosB               (= 1/2 sin 2beta)
+        Flift   = CL_K*strake_mult * r * spd^2 * CL * atmoT   (clamped to +-LIFT_CLAMP_G*m*G)
+        lift is perpendicular to velocity: lv = (-vy, vx)/spd
+        plus |Flift|*GLIDE_K along velocity fv = (vx, vy)/spd
+    Only the lift + glide terms are returned (no gravity/drag/thrust), isolating the invariant.
+    """
+    spd = math.hypot(vx, vy)
+    axx, axy = math.sin(ang), math.cos(ang)
+    nxx, nxy = axy, -axx
+    vno = vx * nxx + vy * nxy
+    sinB = max(-1.0, min(1.0, vno / spd))
+    cosB = math.sqrt(max(0.0, 1 - sinB * sinB))
+    CL = sinB * cosB
+    clk = CL_K * strake_mult
+    Flift = clk * r * spd * spd * CL * atmoT
+    cap = LIFT_CLAMP_G * m * G
+    if Flift > cap:
+        Flift = cap
+    elif Flift < -cap:
+        Flift = -cap
+    lvx = -vy / spd
+    fvx = vx / spd
+    ax = Flift * lvx / m + abs(Flift) * GLIDE_K * fvx / m
+    return ax
+
+
+def test_lift_direction_sane():
+    """CORE flat-plate invariant: for a booster falling down-right (vx=140, vy=-200), the horizontal
+    acceleration from lift must be LARGER at a moderate lean than when the body is ALIGNED with the
+    flow (a near-vertical body pointed along a near-vertical fall). A flat plate makes ZERO lift when
+    aligned (beta=0) and PEAK lift near a 45deg lean. The OLD (buggy) model did the opposite: it grew
+    lift as the body swung toward the flow direction, so pointing vertical in a vertical fall pushed
+    you sideways HARDER. This test guards against that regression.
+
+    Assert: |ax at aligned-with-flow| < |ax at 40deg-off-flow lean|.
+    """
+    vx, vy = 140.0, -200.0
+    spd = math.hypot(vx, vy)
+    # Use the ocean booster's atmosphere/mass regime for a representative magnitude.
+    v = VEHICLES['ocean']
+    m = v['DRY'] + v['FUEL']
+    G = v['G']
+    r = rho(3000, v['RHO0'], v['HSCALE'])   # mid-atmosphere density where lift is live
+
+    # The flow-direction angle (velocity vector) as a body angle: body axis = (sin,cos), so the body
+    # is ALIGNED with the flow (tail-first, beta=0) when ang = atan2(vx, vy). vno = 0 there → CL = 0.
+    ang_flow = math.atan2(vx, vy)
+    # 40deg off-flow lean (nose leaned toward +x side of the flight path).
+    ang_off = ang_flow + math.radians(40)
+
+    ax_aligned = _lift_ax(ang_flow, vx, vy, r, m, G)
+    ax_off = _lift_ax(ang_off, vx, vy, r, m, G)
+
+    # Sweep table for visibility: ax from lift vs body-angle offset from the flow direction.
+    print(f"  flow dir (vx={vx:.0f}, vy={vy:.0f}), spd={spd:.1f} m/s, rho={r:.4f} kg/m^3, m={m} kg")
+    print(f"  {'off-flow deg':>12} | {'beta(deg)':>9} | {'CL':>8} | {'ax_lift (m/s^2)':>16}")
+    for deg in (0, 10, 20, 30, 40, 50, 60, 70, 80, 90):
+        ang = ang_flow + math.radians(deg)
+        # recover beta for display
+        nxx, nxy = math.cos(ang), -math.sin(ang)
+        vno = vx * nxx + vy * nxy
+        sinB = max(-1.0, min(1.0, vno / spd))
+        beta = math.degrees(math.asin(sinB))
+        CL = sinB * math.sqrt(max(0.0, 1 - sinB * sinB))
+        ax = _lift_ax(ang, vx, vy, r, m, G)
+        print(f"  {deg:>12} | {beta:>9.1f} | {CL:>8.4f} | {ax:>16.4f}")
+
+    ok = abs(ax_aligned) < abs(ax_off)
+    print(f"  |ax aligned-with-flow| = {abs(ax_aligned):.4f}  <  "
+          f"|ax 40deg-off-flow| = {abs(ax_off):.4f}  ->  {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        print("  FAIL: lift is NOT larger at a moderate lean than when aligned with the flow "
+              "(flat-plate direction invariant violated).")
     return ok
 
 
@@ -255,6 +367,10 @@ def main():
     reach_ok = test_decel_burn_required()
     print(f"   {'PASS' if reach_ok else 'FAIL'}\n")
 
+    print("2c. Lift direction sane (flat-plate: aligned-with-flow < 40deg lean):")
+    lift_dir_ok = test_lift_direction_sane()
+    print(f"   {'PASS' if lift_dir_ok else 'FAIL'}\n")
+
     print("3. Landability (autopilot sim, each mission):")
     land_ok = True
     for mode in modes:
@@ -264,7 +380,7 @@ def main():
             land_ok = False
     print(f"   {'PASS -- all missions landable' if land_ok else 'FAIL -- see above'}\n")
 
-    all_pass = mdot_ok and twr_ok and reach_ok and land_ok
+    all_pass = mdot_ok and twr_ok and reach_ok and lift_dir_ok and land_ok
     print(f"{'ALL TESTS PASS' if all_pass else 'SOME TESTS FAILED'}")
     sys.exit(0 if all_pass else 1)
 
