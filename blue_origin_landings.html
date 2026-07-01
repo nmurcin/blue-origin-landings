@@ -1594,7 +1594,7 @@ function newRun(m) {
     // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(7000 + Math.random() * 600) * T().bAltMul,   // starts FAR LEFT (uprange); deck is 7+ km to the right
+      x: -(14000 + Math.random() * 1000) * T().bAltMul,  // starts ~14-15 km LEFT — long strake glide to reach Jacklyn
       y: (11500 + Math.random() * 400) * T().bAltMul,
       vx: (180 + Math.random() * 30) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
       vy: -60 * T().bSpdMul,                             // slight descent; mostly horizontal (downrange glide)
@@ -1617,7 +1617,7 @@ function newRun(m) {
     // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
     // closer version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(4000 + Math.random() * 400) * T().bAltMul,   // LEFT of the deck (booster is uprange)
+      x: -(9000 + Math.random() * 800) * T().bAltMul,   // ~9-10 km LEFT — a real glide to reach Jacklyn
       y: (9800 + Math.random() * 300) * T().bAltMul,
       vx: (140 + Math.random() * 20) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
       vy: -40 * T().bSpdMul,                             // slight descent (mostly horizontal)
