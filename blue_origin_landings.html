@@ -2756,7 +2756,10 @@ function updateCam(dt) {
     }
     return;
   }
-  const viewH = Math.min(30000, Math.max(240, b.y * 1.5 + 140));
+  // Ensure both the booster AND the deck (x=0, y=0) are always framed. Scale the cap with the
+  // tier so the higher spawns in Moderate/Full-Sim don't put the deck off-screen.
+  const viewHCap = T().bAltMul > 1 ? 150000 : 30000;
+  const viewH = Math.min(viewHCap, Math.max(240, b.y * 1.5 + 140));
   const targetS = H / viewH;
   const t = Math.min(0.5, Math.max(0, b.y / 16000));
   const padX = 0;
@@ -3753,7 +3756,7 @@ function drawBooster() {
   // per-vehicle visual dimensions (physics is unchanged)
   const VEH_W = mode === 'ocean' ? 5.4 : 9;
   const VEH_H = mode === 'ocean' ? 52 : mode === 'mars' ? 50 : BH;
-  const VW = mode === 'ocean' ? 0.55 : SHIP_MODE ? 0.75 : 1;   // plume width
+  const VW = mode === 'ocean' ? 0.55 : mode === 'mars' ? 0.35 : 1;   // plume width (MK1 = single small BE-7)
   // RCS thruster puffs — FORWARD-END ONLY (New Glenn's RCS is a forward pod; a single lateral jet
   // near the top produces the turning couple about the CoG). Puff size scales with the vehicle so
   // the small MK1 lander gets a small jet. Only shows while there's RCS propellant + steering input.
@@ -5871,10 +5874,11 @@ function drawMenu() {
   let ty = iy + px(28);
   hudText('HOW TO FLY', L, ty, 14, '#e8b93c'); ty += px(24);
   const steps = [
-    'Steer ← →.   Burn: hold SPACE / ↑.   Time-warp: X up / Z reset.',
-    'Boostback: hold the burn, drag the predicted ✕ onto the target, then cut.',
-    'Swing tail- or belly-first, glide her down — one late, hard landing burn.',
-    'Fuel left = score. Mars & the Moon fly belly-first; the Moon adds orbit + a slingshot.'
+    'Steer ← →.   Burn: hold SPACE / ↑.   Fast-forward: X.   Pause: P.',
+    'NG 7×2 / 9×4: boostback to aim the ✕ at Jacklyn, ride the strakes down, then one late burn.',
+    '9×4 is heavier + steeper — lean into the strakes for cross-range (it flies like a lifting body).',
+    'Blue Moon MK1: brake retrograde against your velocity, coast, then a vertical suicide burn.',
+    'Fuel + precision = score.  RCS is a separate tank — use it wisely.'
   ];
   let sfs = 12; const sMaxW = px(580);   // shrink uniformly so the longest line stays inside the box
   ctx.font = px(sfs) + 'px "SF Mono", Menlo, monospace';
@@ -5936,8 +5940,8 @@ function drawMenuNarrow() {
   hudText('HOW TO FLY', x0 + px(16), y + px(22), 12.5, '#e8b93c');
   const steps = [
     MOBILE ? 'Steer: drag the dot.  Burn: hold the button.' : 'Steer ← →.  Burn: hold SPACE / ↑.',
-    'Hold BURN: drag the predicted ✕ onto the target, cut.',
-    'Swing tail/belly-first, glide down — one late, hard burn.'
+    'NG: boostback, ride strakes, one late burn.  9×4: lean for cross-range.',
+    'MK1: brake retrograde, coast, vertical suicide burn.  RCS is separate fuel.'
   ];
   let mfs = 10.5; const mMaxW = bw - px(32);   // shrink uniformly so no step overruns the narrow box
   ctx.font = px(mfs) + 'px "SF Mono", Menlo, monospace';
