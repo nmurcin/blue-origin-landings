@@ -476,8 +476,11 @@ function applyModeParams(m) {
     // = 9.75 kg/s. Lunar TWR ≈ 1.65 at 16.5 t; 20% min-throttle TWR ≈ 0.33.
     G = 1.62; RHO0 = 0; HSCALE = 50000;
     ENTRY_Y = 0; FLIP_Y = 0;
-    DRY_MASS = 7500; FUEL0 = 1200;        // drastically cut — ~123 s full-burn budget (manage it!)
-    THRUST = 4.4e4; MDOT = 9.75;
+    // Fuel sized for the Apollo-style approach: braking + coast + terminal arrest (with margin for
+    // pilot error but not enough to waste). THRUST uprated slightly from the published 44 kN BE-7
+    // for game-playability with the horizontal-braking profile. Public-data-derived game estimate.
+    DRY_MASS = 7500; FUEL0 = 3000;
+    THRUST = 6.6e4; MDOT = 14.63;         // = 6.6e4 / (460·9.80665)
     CDA_AX = 0; CDA_LAT = 0;               // vacuum — no aero
   } else if (m === 'moon') {
     // BLUE MOON MK2 — rides New Glenn to orbit, docks with a transfer stage for propellant,
@@ -1580,17 +1583,19 @@ function newRun(m) {
     return;
   }
   if (m === 'mars') {
-    // BLUE MOON MK1 — powered descent from low lunar orbit, compressed to the flat-world scale.
-    // Vacuum (no aero), 1/6 g. She arrives high and mostly upright with cross-track velocity to
-    // null on the way down — kill the horizontal drift, then a vertical hover-slam onto the pad.
-    // No belly-flop, no flip: a lander descends on its engine, nose up. (TWR≈1.65 → real margin.)
+    // BLUE MOON MK1 — Apollo-style powered descent from low lunar orbit (compressed for the game).
+    // Like the real LM descent: arrive FAST and mostly HORIZONTAL (engine retrograde to brake),
+    // the player brakes to kill horizontal velocity, then pitches vertical for a terminal hover-
+    // slam. Vacuum, 1/6 g — no aero; all control is engine thrust + RCS attitude. Approach from
+    // one side so the player flies the full PDI→pitchover→terminal profile (the signature Apollo
+    // trajectory shape). Fuel is tight — manage it or you're too fast at the surface.
     const dir = Math.random() < 0.5 ? 1 : -1;
     b = {
-      x: -dir * (1700 + Math.random() * 300),
-      y: 3200 + Math.random() * 400,
-      vx: dir * (55 + Math.random() * 20),   // modest cross-track velocity to null
-      vy: -28 - Math.random() * 8,           // gentle initial descent (vacuum: it only builds)
-      ang: dir * (10 * Math.PI / 180),       // slight lean, near-upright
+      x: -dir * (4200 + Math.random() * 600),   // approach from ~4-5 km out
+      y: 5000 + Math.random() * 500,            // ~5 km altitude (PDI-scale, compressed)
+      vx: dir * (380 + Math.random() * 40),     // fast horizontal (needs retrograde braking)
+      vy: -18 - Math.random() * 6,              // slight descent rate (builds under 1/6 g)
+      ang: -dir * (55 * Math.PI / 180),         // tilted ~55° from vertical (engine partly retrograde)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -3604,33 +3609,54 @@ function drawEntryGate(pts) {
   ctx.fillText('ENTRY GATE', w2sX(gx), gy(gx) - tick - 6 * devicePixelRatio);
 }
 
-// Where you would stop if you went full throttle right now
+// Where you would stop if you went full throttle right now. If the stop point is off-screen,
+// shows an edge-clamped chevron + margin distance (like the impact marker does) instead of
+// silently parking at the wrong position.
 function drawBurnStop() {
   burnStopInfo = null;
-  if (b.y > (SHIP_MODE ? 7000 : 4500) || b.vy > -5 || Math.abs(b.ang) > 0.6) return;
+  if (b.y > (T().entryY > 8500 ? T().entryY * 0.6 : 4500) || b.vy > -5 || Math.abs(b.ang) > 0.6) return;
   const stop = predictBurnStop();
   if (!stop) return;
-  const floor = 0;   // all booster + lander modes touch down at ground/deck level (no chopstick catch)
+  const floor = 0;
   const margin = stop.y - floor;
   const color = margin > 250 ? '#58d68d' : margin > 80 ? '#ffb14a' : '#ff5040';
-  // clamp to the visible area — the marker parks at the edge instead of leaving
   const r = 16 * devicePixelRatio;
-  let sx = w2sX(stop.x), sy = w2sY(stop.y + curveOff(stop.x));
-  // narrow screens: stay left of the corner telemetry column, but follow the
-  // true stop point all the way down — over-clamping reads as a wrong marker
-  sx = Math.min(W - (NARROW ? px(180) : px(180)), Math.max(NARROW ? px(70) : px(60), sx));
-  sy = Math.min(H - (NARROW ? px(56) : px(40)), Math.max(px(90), sy));
-  for (const pass of [0, 1]) {
-    ctx.strokeStyle = pass === 0 ? 'rgba(8,14,22,0.6)' : color;
-    ctx.lineWidth = (pass === 0 ? 4 : 2) * devicePixelRatio;
+  const rawSx = w2sX(stop.x), rawSy = w2sY(stop.y + curveOff(stop.x));
+  const onScreen = rawSx > px(50) && rawSx < W - px(160) && rawSy > px(80) && rawSy < H - px(40);
+  let sx, sy;
+  if (onScreen) {
+    sx = rawSx; sy = rawSy;
+    // draw the ⊣⊢ STOP bar at the true position
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass === 0 ? 'rgba(8,14,22,0.6)' : color;
+      ctx.lineWidth = (pass === 0 ? 4 : 2) * devicePixelRatio;
+      ctx.beginPath();
+      ctx.moveTo(sx - r, sy); ctx.lineTo(sx + r, sy);
+      ctx.moveTo(sx - r, sy); ctx.lineTo(sx - r, sy - r * 0.4);
+      ctx.moveTo(sx + r, sy); ctx.lineTo(sx + r, sy - r * 0.4);
+      ctx.stroke();
+    }
+    hudText('STOP', sx + r + 5 * devicePixelRatio, sy + 4 * devicePixelRatio, 11, color, 'left');
+  } else {
+    // OFF-SCREEN: edge-clamped mini marker + chevron pointing toward the true stop + margin text
+    sx = Math.min(W - px(160), Math.max(px(60), rawSx));
+    sy = Math.min(H - px(40), Math.max(px(80), rawSy));
+    ctx.strokeStyle = color; ctx.lineWidth = 2 * devicePixelRatio;
+    const r2 = px(6);
     ctx.beginPath();
-    ctx.moveTo(sx - r, sy); ctx.lineTo(sx + r, sy);
-    ctx.moveTo(sx - r, sy); ctx.lineTo(sx - r, sy - r * 0.4);
-    ctx.moveTo(sx + r, sy); ctx.lineTo(sx + r, sy - r * 0.4);
+    ctx.moveTo(sx - r2, sy - r2); ctx.lineTo(sx + r2, sy + r2);
+    ctx.moveTo(sx + r2, sy - r2); ctx.lineTo(sx - r2, sy + r2);
     ctx.stroke();
+    // chevron pointing toward the real stop direction
+    const ang = Math.atan2(rawSy - sy, rawSx - sx);
+    ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(ang) * px(12), sy + Math.sin(ang) * px(12));
+    ctx.lineTo(sx + Math.cos(ang - 0.4) * px(7), sy + Math.sin(ang - 0.4) * px(7));
+    ctx.moveTo(sx + Math.cos(ang) * px(12), sy + Math.sin(ang) * px(12));
+    ctx.lineTo(sx + Math.cos(ang + 0.4) * px(7), sy + Math.sin(ang + 0.4) * px(7));
+    ctx.stroke();
+    hudText('STOP +' + Math.round(margin) + ' m', sx + px(14), sy + px(3), 9, color, 'left');
   }
-  hudText('STOP', sx + r + 5 * devicePixelRatio, sy + 4 * devicePixelRatio, 11, color, 'left');
-  // margin readout is rendered later, in the HUD layer, so panels never cover it
   burnStopInfo = {
     text: 'BURN STOP ' + (margin >= 0 ? '+' : '') + Math.round(margin) + ' m ' +
           (mode === 'mars' ? 'above the surface' : 'above the deck'),
