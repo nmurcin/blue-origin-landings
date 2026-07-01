@@ -1616,7 +1616,7 @@ function newRun(m) {
     // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(10500 + Math.random() * 1000) * T().bAltMul,  // ~10.5-11.5 km LEFT — long strake glide to Jacklyn
+      x: -(14000 + Math.random() * 1000) * T().bAltMul,  // ~14 km LEFT — matches the reach from the high (22km) opening
       y: (13000 + Math.random() * 400) * T().bAltMul,
       vx: (550 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier, hotter Mach-class entry)
       vy: -(600 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
@@ -1639,7 +1639,7 @@ function newRun(m) {
     // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
     // closer version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(8500 + Math.random() * 800) * T().bAltMul,   // ~8.5-9 km LEFT — a real glide to reach Jacklyn
+      x: -(12500 + Math.random() * 800) * T().bAltMul,  // ~12.5 km LEFT — matches the reach from the high (22km) opening
       y: (11000 + Math.random() * 400) * T().bAltMul,
       vx: (450 + Math.random() * 40) * T().bSpdMul,     // FAST downrange (Mach-class energy) → long glide
       vy: -(480 + Math.random() * 60) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up

@@ -18,11 +18,11 @@ TIERS = {
 VEHICLES = {
     'ocean': {'DRY': 180000, 'FUEL': 70000, 'THR': 4.0e6, 'MDOT': 1200, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 150, 'CDA_LAT': 360,
-              'spawn': {'x': -8500, 'y': 11000, 'vx': 450, 'vy': -480},
+              'spawn': {'x': -12500, 'y': 11000, 'vx': 450, 'vy': -480},
               'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44},
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
-              'spawn': {'x': -10500, 'y': 13000, 'vx': 550, 'vy': -600},
+              'spawn': {'x': -14000, 'y': 13000, 'vx': 550, 'vy': -600},
               'STRAKE_MULT': 1.35,
               'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
