@@ -30,8 +30,8 @@ VEHICLES = {
               'spawn': {'x': 15000, 'y': 5000, 'vx': -340, 'vy': -12},
               'OK_vy': 3.5, 'OK_vx': 2.5, 'padHalf': 30},
 }
-STRAKE_K = 55
-FIN_K = 22
+STRAKE_K = 75
+FIN_K = 26
 RCS0 = {'ocean': 600, 'tower': 700, 'mars': 2000}
 RCS_BURN = 55
 
