@@ -3734,7 +3734,7 @@ function drawBooster() {
     // struts that EXTEND DOWNWARD out of recesses in the aft body (NOT a hinge-swing). Like spider
     // legs or telescoping outriggers that push straight down and slightly outward. Multiple per side.
     // When stowed they're inside the body; when deployed they slide/piston DOWN.
-    const bodyW = vH * 0.065;          // body half-width at the aft skirt
+    const bodyW = vH * 0.04;           // tighter to the body center (legs exit close together)
     const legExt = vH * 0.05 * e;     // shrunk ~75% (was 0.20) — shorter extension
     const nLegs = 3;                   // 3 visible per side in the 2D view (6 total around the body)
     const tubeW = 0.9;                 // tube thickness shrunk ~35% (was 1.4)
