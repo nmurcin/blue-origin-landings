@@ -496,10 +496,10 @@ function applyModeParams(m) {
     // THRUST 8.4e6 → MDOT = 8.4e6/(340·9.80665) = 2519 kg/s; landing TWR ≈ 3.1 at 280 t.
     G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
     ENTRY_Y = T().entryY; FLIP_Y = 3000;
-    DRY_MASS = 210000; FUEL0 = 70000;
-    // Landing thrust: ≈2 BE-4 deeply throttled (~4.5 MN) → TWR ≈ 1.6 at landing mass.
-    // Feels like a real suicide burn — time it late or you're going too fast.
-    THRUST = 4.5e6; MDOT = 1350;
+    DRY_MASS = 210000; FUEL0 = 90000;    // more fuel than 7×2 (heavier + faster entry needs it)
+    // Landing thrust: ≈2.5 BE-4 deeply throttled (~5 MN) → TWR ≈ 1.7 at 300t landing mass.
+    // The heavier, faster 9×4 gets a slightly bigger landing cluster.
+    THRUST = 5.0e6; MDOT = 1500;
     CDA_AX = 165; CDA_LAT = 380;           // wide 7 m body; a touch more drag than the 7×2
   } else {
     // NEW GLENN 7×2 — seven-engine first stage landing on Jacklyn (LPV-1). Public 7 m × 57.5 m
@@ -3806,7 +3806,7 @@ function drawBooster() {
   // Traced art. NG booster landings show ONLY the GS1 first stage (clip above the gold interstage
   // band at y≈0.59 — the upper stage separated). MK1 is the full lander. (The fins/strakes are
   // part of the traced silhouette, so no separate fin overlay is drawn.)
-  const NG_H = 62, GS1_CUT = 0.59, MK1_H = 18;
+  const NG_H = 62, GS1_CUT = 0.55, MK1_H = 18;   // cut just above the gold interstage (no white upper-stage sliver)
   if (mode === 'ocean') drawTracedVehicle('ng7x2', NG_H, GS1_CUT);
   else if (mode === 'tower') drawTracedVehicle('ng9x4', NG_H, GS1_CUT);
   else drawTracedVehicle('mk1', MK1_H);   // mars = MK1 (moon/MK2 mission removed from this build)
@@ -6126,6 +6126,12 @@ function drawDone() {
     hudText(result.score >= best ? '★ NEW BEST' : 'best ' + best, pcx, y, 13, '#8fa0ae', 'center'); y += px(20);
     if (mode === 'ocean' && save.oceanWins === UNLOCK_WINS) {
       hudText('9×4 UNLOCKED — ready for the harder variant? press M', pcx, y + px(8), 14, '#e8b93c', 'center'); y += px(22);
+    } else if (mode === 'ocean' && save.oceanWins > UNLOCK_WINS) {
+      hudText('try the 9×4 — heavier, steeper, lean on those strakes', pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
+    } else if (mode === 'tower') {
+      hudText('nice landing! ready to fly Blue Moon to the Moon? press M', pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
+    } else if (mode === 'mars') {
+      hudText('the eagle has landed. well, the blue moon. nice work.', pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
     }
   }
   // 1v1 clap-back / encouragement when this run answered a challenge
