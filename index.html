@@ -1652,10 +1652,29 @@ function newRun(m) {
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: 0, t: 0, sep: false };
   }
   b.rcsFuel = RCS0[m] || 1500; b.rcsFuel0 = b.rcsFuel;   // separate RCS propellant bank
+  // STACKED OPENING (NG booster modes): the level opens with GS1+GS2 still mated, coasting together.
+  // Controls are LOCKED. At OPEN_SEP the stage separates (GS2 ignites, climbs prograde up-and-right);
+  // at OPEN_CTRL control hands off to the player. b.openT counts up; b.opening ends at OPEN_CTRL.
+  if (m === 'ocean' || m === 'tower') {
+    b.opening = true; b.openT = 0; b.openSep = false;
+    // Open the stack HIGH and SLOW, well above the atmosphere (ENTRY_Y+~4km) so the ~3.4s locked
+    // opening + separation plays out before any reentry heating — the player gets control with
+    // plenty of altitude to set up the decel burn. Momentum is scaled down for the coast; the
+    // full descent energy builds as it falls.
+    b.y = ENTRY_Y + 4500 + Math.random() * 600;   // safely above the heating interface
+    b.vx *= 0.5; b.vy = -60;                        // gentle prograde coast at the top of the arc
+    b.ang = 20 * Math.PI / 180;   // stack coasting prograde (up-and-right), pre-flip attitude
+    ship = { x: 0, y: 0, vx: 0, vy: 0, ang: b.ang, t: 0, sep: false, mated: true };
+  } else {
+    b.opening = false;
+  }
   result = null; particles = []; armClose = 0; armY = ARM_Y; shakeT = 0; timeScale = 1;
   cam.x = b.x; cam.y = b.y * 0.62; cam.s = H / 30000;
   scene = 'flying';
 }
+// Opening-sequence timing (seconds).
+const OPEN_SEP = 1.8;    // stack coasts, then GS2 separates + ignites
+const OPEN_CTRL = 3.4;   // ~1.6s after separation, controls hand off to the player
 
 function wind(h) {
   return env.windBase * (0.55 + 0.45 * Math.sin(h * 0.00045 + env.windPhase))
@@ -2186,38 +2205,40 @@ function evalTouchdown() {
 function updateShip(dt) {
   if (!ship || !b || dt <= 0) return;
   ship.t += dt;
+  // NG booster modes: the stacked-opening sequence in update() owns separation timing (ship.mated
+  // + ship.sep are set there). Moon mode uses the legacy self-timed separation below.
+  const ngMode = (mode === 'ocean' || mode === 'tower');
   if (!ship.sep) {
+    // MATED: GS2 rides on top of the booster along the stack axis.
     ship.ang = b.ang;
     ship.x = b.x + Math.sin(b.ang) * BH;
     ship.y = b.y + Math.cos(b.ang) * BH;
     ship.vx = b.vx; ship.vy = b.vy;
-    if (ship.t >= 0.55) {
+    if (!ngMode && ship.t >= 0.55) {   // moon-mode legacy auto-separation
       ship.sep = true;
-      // separation springs: ship away along the stack axis, booster nudged back
       ship.vx += Math.sin(ship.ang) * 3; ship.vy += Math.cos(ship.ang) * 3;
       b.vx -= Math.sin(b.ang) * 1.2; b.vy -= Math.cos(b.ang) * 1.2;
-      // the push-off is never clean: the booster picks up a tumble to kill
       b.angv += (Math.random() < 0.5 ? -1 : 1) * (0.55 + Math.random() * 0.4);
-      playClank();
-      shakeT = Math.max(shakeT, 0.18);
-      for (let i = 0; i < 14; i++) {
-        particles.push({
-          x: ship.x, y: ship.y,
-          vx: b.vx + (Math.random() - 0.5) * 25,
-          vy: b.vy + (Math.random() - 0.5) * 25,
-          life: 0.8 + Math.random() * 0.6, age: 0,
-          r: 1.5 + Math.random() * 2.5, kind: 'smoke'
-        });
-      }
+      playClank(); shakeT = Math.max(shakeT, 0.18);
     }
   } else {
-    const a = ship.t < 6.5 ? 24 : 5;   // hard burn for orbit, then ease off
-    if (ship.t < 6.5) ship.ang += Math.sign(ship.ang) * 0.04 * dt;  // gravity turn
+    // SEPARATED: GS2 burns to orbit — climb PROGRADE (up-and-right). Uses its own sep-relative
+    // timer (set to 0 at separation). Keeps a rightward+upward acceleration so it clearly pulls
+    // AWAY and UP from the descending booster (fixing the "GS2 appears below GS1" bug).
+    const st = ngMode ? ship.t : ship.t;
+    const a = st < 7 ? 26 : 6;
+    // steer the exhaust so thrust points up-and-right (prograde to orbit): aim ~35° right of vertical
+    const targetAng = 35 * Math.PI / 180;
+    ship.ang += (targetAng - ship.ang) * Math.min(1, dt * 1.5);
     ship.vx += Math.sin(ship.ang) * a * dt;
-    ship.vy += Math.cos(ship.ang) * a * dt - 2.5 * dt;
+    ship.vy += Math.cos(ship.ang) * a * dt - 1.2 * dt;   // net upward (thrust beats gravity)
     ship.x += ship.vx * dt;
     ship.y += ship.vy * dt;
-    if (ship.t > 14) ship = null;
+    // engine plume trail
+    if (Math.random() < 0.8) particles.push({ x: ship.x - Math.sin(ship.ang) * BH, y: ship.y - Math.cos(ship.ang) * BH,
+      vx: ship.vx * 0.3 - Math.sin(ship.ang) * 40, vy: ship.vy * 0.3 - Math.cos(ship.ang) * 40,
+      life: 0.5 + Math.random() * 0.5, age: 0, r: 1.5 + Math.random() * 2.5, kind: 'smoke' });
+    if (ship.t > (ngMode ? 9 : 14)) ship = null;
   }
 }
 
@@ -2525,8 +2546,27 @@ function update(dt) {
 
   b.t += dt;
   // keyboard is bang-bang; the drag-dot slider is analog (-1..1) into the same channel
-  let tq = (keys['ArrowLeft'] ? -1 : 0) + (keys['ArrowRight'] ? 1 : 0);
-  if (!tq && MOBILE) tq = steerVal;
+  // STACKED OPENING: coast the mated stack, separate, then hand off control. While opening,
+  // the player's stick/throttle are ignored (controls locked) and the stack flies ballistically.
+  if (b.opening) {
+    b.openT += dt;
+    if (!b.openSep && b.openT >= OPEN_SEP) {
+      // SEPARATION: GS2 lights and springs prograde (up-and-right); GS1 gets a small kick back.
+      b.openSep = true;
+      if (ship) { ship.sep = true; ship.mated = false; ship.t = 0;
+        ship.x = b.x + Math.sin(b.ang) * BH; ship.y = b.y + Math.cos(b.ang) * BH;
+        ship.vx = b.vx + Math.sin(b.ang) * 6; ship.vy = b.vy + Math.cos(b.ang) * 6; ship.ang = b.ang; }
+      b.vx -= Math.sin(b.ang) * 2; b.vy -= Math.cos(b.ang) * 2;
+      playClank(); shakeT = Math.max(shakeT, 0.2);
+      for (let i = 0; i < 16; i++) particles.push({ x: b.x + Math.sin(b.ang) * BH, y: b.y + Math.cos(b.ang) * BH,
+        vx: b.vx + (Math.random() - 0.5) * 30, vy: b.vy + (Math.random() - 0.5) * 30,
+        life: 0.7 + Math.random() * 0.6, age: 0, r: 1.5 + Math.random() * 2.5, kind: 'smoke' });
+    }
+    if (b.openT >= OPEN_CTRL) b.opening = false;   // YOU HAVE CONTROL
+  }
+  const locked = b.opening;   // controls disabled during the opening sequence
+  let tq = locked ? 0 : ((keys['ArrowLeft'] ? -1 : 0) + (keys['ArrowRight'] ? 1 : 0));
+  if (!tq && MOBILE && !locked) tq = steerVal;
   b.tqIn = tq;
   // spend RCS propellant while steering (separate bank from engine fuel); dry → RCS couple is
   // lost inside stepPhysics (fins/gimbal still work).
@@ -2535,7 +2575,7 @@ function update(dt) {
   // smoothly — quick to engage, gentle to release
   b.fin += (tq - b.fin) * Math.min(1, dt * (tq !== 0 ? 4 : 1.8));
   if (Math.abs(b.fin) < 0.02 && !tq) b.fin = 0;
-  const burn = keys[' '] || keys['ArrowUp'] || burnHeld;
+  const burn = !locked && (keys[' '] || keys['ArrowUp'] || burnHeld);
   b.thr += ((burn ? 1 : 0) - b.thr) * Math.min(1, dt * 8);
   if (b.thr < 0.02 && !burn) b.thr = 0;
 
@@ -4203,6 +4243,16 @@ function capsuleBar(x, y, w, h, frac, c0, c1, lab, labW, labColor) {
 // the one-line coach: what to do right now, phrased for the input device
 function flightHint() {
   let hint = '', warn = false;
+  // STACKED OPENING sequence prompts (NG booster modes).
+  if (b.opening) {
+    if (!b.openSep) hint = 'STACK COASTING — GS1 + GS2 mated · stand by for separation';
+    else hint = 'SEPARATION — GS2 igniting to orbit · you have control in a moment';
+    return { hint, warn };
+  }
+  if (b.openT !== undefined && b.openT < OPEN_CTRL + 2.5 && (mode === 'ocean' || mode === 'tower')) {
+    // brief "YOU HAVE CONTROL" beat right after the handoff
+    return { hint: 'YOU HAVE CONTROL — align retrograde and stand by for the DECEL BURN', warn: false };
+  }
   if (mode === 'moon' && !inOrbitalPhase()) {
     const BK = MOBILE ? 'BURN' : 'SPACE / ↑';
     const SK = MOBILE ? 'steer' : '← →';
