@@ -457,6 +457,11 @@ const TIER_ORDER = ['arcade', 'moderate', 'fullsim'];
 let tier = 'arcade';                 // active tier (set from save at boot / by the menu picker)
 function T() { return TIER[tier] || TIER.arcade; }   // active tier params
 const SPEED_OF_SOUND = 340;          // m/s, for the displayed Mach number
+// RCS propellant bank per vehicle (a SEPARATE small pool from the main engine fuel). Steering
+// spends it; when it's dry, attitude control falls back to aero fins only. Sized to scale — the
+// small MK1 lander carries far less. (kg, game-tuned.)
+const RCS0 = { ocean: 2200, tower: 2600, mars: 240, moon: 900 };
+const RCS_BURN = 40;                 // kg/s spent while steering at full input (scaled by |tqIn|)
 
 function applyModeParams(m) {
   // No mission belly-flops in this build: New Glenn lands engines-first; Blue Moon lands
@@ -1631,6 +1636,7 @@ function newRun(m) {
     };
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: 0, t: 0, sep: false };
   }
+  b.rcsFuel = RCS0[m] || 1500; b.rcsFuel0 = b.rcsFuel;   // separate RCS propellant bank
   result = null; particles = []; armClose = 0; armY = ARM_Y; shakeT = 0; timeScale = 1;
   cam.x = b.x; cam.y = b.y * 0.62; cam.s = H / 30000;
   scene = 'flying';
@@ -1702,11 +1708,15 @@ function stepPhysics(s, dt, thr, tq, fin) {
 
   // rotation: player torque (+gimbal when burning), aero damping.
   // Damping is light: rotation carries momentum, over-rotation is on you.
+  // RCS runs on a separate propellant bank — when it's dry, the pure-RCS couple (TORQUE) is lost
+  // and you steer only with the engine gimbal (thr) + aero fins. (Predictor states have no rcsFuel
+  // field → treated as available, so the aim line reflects full authority.)
+  const rcsOK = (s.rcsFuel === undefined) || (s.rcsFuel > 0);
   let tqEff = tq;
   if (!SHIP_MODE && !ASCENT_MODE && thr < 0.3 && atmoT > 0.5 && s.vy < 0) {
     tqEff = tq * Math.max(0.35, 1 - Math.abs(s.ang) / 0.7);   // gentle lean ramp — fins keep authority
   }
-  let aacc = tqEff * (TORQUE + thr * 1.3);
+  let aacc = tqEff * ((rcsOK ? TORQUE : 0) + thr * 1.3);
   aacc -= s.angv * (0.18 + r * spd * 0.0024 * atmoT);
   if (ASCENT_MODE) {
     // Climbing under power: gimbal-steered, with gentle aerodynamic
@@ -2521,6 +2531,9 @@ function update(dt) {
   let tq = (keys['ArrowLeft'] ? -1 : 0) + (keys['ArrowRight'] ? 1 : 0);
   if (!tq && MOBILE) tq = steerVal;
   b.tqIn = tq;
+  // spend RCS propellant while steering (separate bank from engine fuel); dry → RCS couple is
+  // lost inside stepPhysics (fins/gimbal still work).
+  if (tq && b.rcsFuel > 0) b.rcsFuel = Math.max(0, b.rcsFuel - RCS_BURN * Math.abs(tq) * dt);
   // fin deflection eases in and out so the steering (and the line) sweep
   // smoothly — quick to engage, gentle to release
   b.fin += (tq - b.fin) * Math.min(1, dt * (tq !== 0 ? 4 : 1.8));
@@ -2604,13 +2617,15 @@ function update(dt) {
       r: 0.8 + Math.random() * 1.6, kind: 'fire'
     });
   }
-  // The vehicle sprite is FLOOR-scaled (bs = max(cam.s, 0.42·DPR)) so when zoomed
-  // out it's much bigger than world; smoke is world-positioned, so spawn it offset
-  // by the floor-scale factor to stay at/below the visible engine nozzle (not over it).
+  // Engine smoke: spawn AT the nozzle (the sprite base = b.x,b.y) and push it OUT the engine end
+  // along the body axis (opposite the nose), so the plume stays glued to the nozzle instead of
+  // floating up the body. Floor-scaled so it tracks the on-screen sprite size when zoomed out.
   const spriteK = Math.max(cam.s, 0.42 * devicePixelRatio) / (cam.s || 1);
   // engine smoke/fire particles
   if (b.thr > 0.1 && Math.random() < 0.6) {
-    const eOff = (8 + Math.random() * 8) * spriteK;
+    const eOff = (2 + Math.random() * 5) * spriteK;   // small: just off the nozzle lip
+    // thrust reaction accelerates the vehicle along (sin,cos) = nose dir, so exhaust exits the
+    // engine along -(sin,cos); spawn smoke just off that nozzle end (small offset = stays attached)
     const ex = b.x - Math.sin(b.ang) * eOff, ey = b.y - Math.cos(b.ang) * eOff;
     particles.push({
       x: ex, y: Math.max(ey, 0.5),
@@ -3448,11 +3463,9 @@ function drawChopArm(depth) {
 
 // near-side arm, rendered after the booster so she hangs between the pair
 function drawNearChopArm() {
-  if (mode !== 'tower' || !b) return;
-  ctx.save();
-  ctx.translate(0, -curveOff(TOWER_X) * cam.s);
-  drawChopArm(1);
-  ctx.restore();
+  // No chopstick catch anywhere in this game (Blue has no Mechazilla) — the 9×4 lands on Jacklyn
+  // at sea like the 7×2, so the near chopstick arm is never drawn.
+  return;
 }
 
 // The EDL aim (predicted-impact ✕ + pad ✛) FADES IN as she commits belly-first into the
@@ -3694,22 +3707,21 @@ function drawBooster() {
   const VEH_W = mode === 'ocean' ? 5.4 : 9;
   const VEH_H = mode === 'ocean' ? 52 : mode === 'mars' ? 50 : BH;
   const VW = mode === 'ocean' ? 0.55 : SHIP_MODE ? 0.75 : 1;   // plume width
-  // RCS thruster puffs (the control authority out in space)
+  // RCS thruster puffs — FORWARD-END ONLY (New Glenn's RCS is a forward pod; a single lateral jet
+  // near the top produces the turning couple about the CoG). Puff size scales with the vehicle so
+  // the small MK1 lander gets a small jet. Only shows while there's RCS propellant + steering input.
   const qbarB = 0.5 * rho(b.y) * (b.vx * b.vx + b.vy * b.vy);
-  if (Math.abs(b.tqIn) > 0.2 && (b.y > ENTRY_Y + 1500 || qbarB < 2500) && scene === 'flying') {
+  if (Math.abs(b.tqIn) > 0.2 && (b.rcsFuel === undefined || b.rcsFuel > 0) &&
+      (b.y > ENTRY_Y + 1500 || qbarB < 2500) && scene === 'flying') {
     const d = Math.sign(b.tqIn);
     ctx.fillStyle = 'rgba(225,240,255,' + (0.55 + Math.random() * 0.3).toFixed(2) + ')';
-    const jl = 6 + Math.random() * 3;  // jet length, m
-    // nose jet pushes the nose toward +d; tail jet opposite
+    const jl = (mode === 'mars' ? 3 : 6) + Math.random() * 3;   // jet length (m), smaller on MK1
+    const ny = -VEH_H + VEH_H * 0.10;                            // forward pod, ~10% down from the nose
+    // a lateral jet firing to −d off the forward pod → nose swings toward +d (the couple you steer)
     ctx.beginPath();
-    ctx.moveTo(-d * VEH_W / 2, -VEH_H + 6);
-    ctx.lineTo(-d * (VEH_W / 2 + jl), -VEH_H + 4);
-    ctx.lineTo(-d * (VEH_W / 2 + jl), -VEH_H + 8);
-    ctx.closePath(); ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(d * VEH_W / 2, -8);
-    ctx.lineTo(d * (VEH_W / 2 + jl), -10);
-    ctx.lineTo(d * (VEH_W / 2 + jl), -6);
+    ctx.moveTo(-d * VEH_W / 2, ny);
+    ctx.lineTo(-d * (VEH_W / 2 + jl), ny - jl * 0.28);
+    ctx.lineTo(-d * (VEH_W / 2 + jl), ny + jl * 0.28);
     ctx.closePath(); ctx.fill();
   }
   // exhaust flame — widens in thin air, shows shock diamonds under throttle
@@ -3750,7 +3762,9 @@ function drawBooster() {
   else drawTracedVehicle('mk1', MK1_H);   // mars = MK1 (moon/MK2 mission removed from this build)
   ctx.restore();
 
-  // reentry plasma — drawn in world space trailing opposite velocity
+  // reentry plasma — forms at the AFT/engine end (which faces into the airflow tail-first) and
+  // streams opposite the velocity. Anchored to the aft in the sprite frame so it stays glued to
+  // the nozzle end, not floating in mid-air.
   if (b.heatFrac > 0.18 && scene === 'flying') {
     const a = Math.min(1, (b.heatFrac - 0.18) * 1.4);
     const spd = Math.hypot(b.vx, b.vy) || 1;
@@ -3758,7 +3772,9 @@ function drawBooster() {
     ctx.save();
     ctx.globalAlpha = a * 0.8;
     const ps = Math.max(cam.s, 0.42 * devicePixelRatio);
-    const cx = w2sX(b.x), cy = w2sY(b.y) - Math.cos(b.ang) * PIN_OFFSET / 2 * ps;
+    // aft point = the engine end of the sprite (its base at b.x,b.y), a hair out the nozzle
+    const aftOff = 3 * ps;
+    const cx = w2sX(b.x) - Math.sin(b.ang) * aftOff, cy = w2sY(b.y + curveOff(b.x)) - Math.cos(b.ang) * aftOff;
     const len = (40 + 70 * b.heatFrac) * ps;
     // incandescent glow streaming off the trailing side only
     const gx = cx + dx * 16 * ps, gyp = cy - dy * 16 * ps;
@@ -4212,9 +4228,10 @@ function drawHudPanel() {
   const spd = orbital ? Math.hypot(b.ovx, b.ovy) : Math.hypot(b.vx, b.vy);
   const altKm = Math.hypot(b.ox, b.oy) - R_E_KM;
   const km = v => v >= 10000 ? (v / 1000).toFixed(0) + 'k KM' : Math.round(v).toLocaleString() + ' KM';
-  const barsN = 1 + (showHeat ? 1 : 0) + (b.damage > 0.5 ? 1 : 0);
+  const barsN = 1 + (b.rcsFuel0 ? 1 : 0) + (showHeat ? 1 : 0) + (b.damage > 0.5 ? 1 : 0);
   const ctxRows = orbital ? (b.phase === 'orbit' ? 3 : 2) : 1;   // orbit phase adds the STABLE/speed row
-  const blockH = px(17) + px(16) + ctxRows * px(13) + px(6) + barsN * px(13);
+  const machRow = orbital ? 0 : 1;                               // atmospheric MACH readout row
+  const blockH = px(17) + px(16) + machRow * px(13) + ctxRows * px(13) + px(6) + barsN * px(13);
   let y = H - px(52) - blockH;                  // anchor bottom-right, clear of the sponsor strip
   // attitude ball + engine cluster float above the readouts, flush right
   drawAttitudeIndicator(rxv - px(20), y - px(150), px(20), true);
@@ -4260,6 +4277,11 @@ function drawHudPanel() {
   }
   y += px(6);
   capsuleBar(bx, y, bw, px(6), b.fuel / FUEL0, '#f5f7f9', '#9fb6c6', orbital ? 'PROP' : 'FUEL', lbW, WL); y += px(13);
+  // separate RCS propellant bank (attitude control) — cyan bar; turns red-ish near empty
+  if (b.rcsFuel0) {
+    const rf = Math.max(0, b.rcsFuel) / b.rcsFuel0;
+    capsuleBar(bx, y, bw, px(6), rf, '#bfe9ff', rf < 0.15 ? '#ff7a4a' : '#4fc3e8', 'RCS', lbW, WL); y += px(13);
+  }
   if (showHeat) { capsuleBar(bx, y, bw, px(6), Math.min(1, b.heatFrac), '#ffd29a', b.heatFrac > 0.95 ? '#ff5040' : '#ff8d2c', 'HEAT', lbW, WL); y += px(13); }
   if (b.damage > 0.5) { capsuleBar(bx, y, bw, px(6), b.damage / 100, '#ff8d7a', '#e74c3c', 'DMG', lbW, WL); y += px(13); }
   // (WARP now lives with its X/Z control in the top-right legend, not here)
