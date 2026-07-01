@@ -3806,9 +3806,11 @@ function drawBooster() {
   // Traced art. NG booster landings show ONLY the GS1 first stage (clip above the gold interstage
   // band at y≈0.59 — the upper stage separated). MK1 is the full lander. (The fins/strakes are
   // part of the traced silhouette, so no separate fin overlay is drawn.)
-  const NG_H = 62, GS1_CUT = 0.55, MK1_H = 18;   // cut just above the gold interstage (no white upper-stage sliver)
-  if (mode === 'ocean') drawTracedVehicle('ng7x2', NG_H, GS1_CUT);
-  else if (mode === 'tower') drawTracedVehicle('ng9x4', NG_H, GS1_CUT);
+  // GS1 cut = the TOP of each vehicle's gold interstage band (no white upper-stage sliver).
+  // ng7x2's gold tops at y≈0.588; ng9x4's at y≈0.540. Cut right there.
+  const NG_H = 62, MK1_H = 18;
+  if (mode === 'ocean') drawTracedVehicle('ng7x2', NG_H, 0.588);
+  else if (mode === 'tower') drawTracedVehicle('ng9x4', NG_H, 0.540);
   else drawTracedVehicle('mk1', MK1_H);   // mars = MK1 (moon/MK2 mission removed from this build)
   ctx.restore();
 
