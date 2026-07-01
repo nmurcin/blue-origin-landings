@@ -2552,13 +2552,16 @@ function update(dt) {
     b.openT += dt;
     if (!b.openSep && b.openT >= OPEN_SEP) {
       // SEPARATION: GS2 lights and springs prograde (up-and-right); GS1 gets a small kick back.
+      // Spawn GS2 exactly where the upper stage sat in the mated silhouette (the gold interstage
+      // seam, ~cut height up the body axis) so it peels off smoothly instead of teleporting.
       b.openSep = true;
+      const seam = 62 * (mode === 'tower' ? 0.540 : 0.588);   // seam height up the body axis (world m; 62 = NG_H)
       if (ship) { ship.sep = true; ship.mated = false; ship.t = 0;
-        ship.x = b.x + Math.sin(b.ang) * BH; ship.y = b.y + Math.cos(b.ang) * BH;
-        ship.vx = b.vx + Math.sin(b.ang) * 6; ship.vy = b.vy + Math.cos(b.ang) * 6; ship.ang = b.ang; }
-      b.vx -= Math.sin(b.ang) * 2; b.vy -= Math.cos(b.ang) * 2;
-      playClank(); shakeT = Math.max(shakeT, 0.2);
-      for (let i = 0; i < 16; i++) particles.push({ x: b.x + Math.sin(b.ang) * BH, y: b.y + Math.cos(b.ang) * BH,
+        ship.x = b.x + Math.sin(b.ang) * seam; ship.y = b.y + Math.cos(b.ang) * seam;
+        ship.vx = b.vx + Math.sin(b.ang) * 2.5; ship.vy = b.vy + Math.cos(b.ang) * 2.5; ship.ang = b.ang; }
+      b.vx -= Math.sin(b.ang) * 1; b.vy -= Math.cos(b.ang) * 1;
+      playClank(); shakeT = Math.max(shakeT, 0.15);
+      for (let i = 0; i < 16; i++) particles.push({ x: b.x + Math.sin(b.ang) * seam, y: b.y + Math.cos(b.ang) * seam,
         vx: b.vx + (Math.random() - 0.5) * 30, vy: b.vy + (Math.random() - 0.5) * 30,
         life: 0.7 + Math.random() * 0.6, age: 0, r: 1.5 + Math.random() * 2.5, kind: 'smoke' });
     }
