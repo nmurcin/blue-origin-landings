@@ -1728,12 +1728,11 @@ function stepPhysics(s, dt, thr, tq, fin) {
     aacc -= 2.4e-5 * r * spd * vno * atmoT;
   } else {
     // New Glenn fins + strakes give CONTINUOUS aerodynamic authority — no grid-fin stall
-    // lockout. A VERY LIGHT weathercock biases the body toward velocity (engines-first on descent)
-    // but deliberately DOES NOT snap it vertical — the vehicle naturally holds ~10-30 deg from
-    // vertical during descent (matching real NG video data), sustaining a constant angle of attack
-    // that lets the strakes generate cross-range lift. The pilot overrides with fins for steering.
-    // Weakened from 3.5e-5 to 2.0e-5 so the descent angle is more inclined (more lift, longer glide).
-    aacc -= 2.0e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
+    // lockout. A MINIMAL weathercock barely biases the body toward vertical — the strakes dominate,
+    // holding the vehicle at ~25-35 deg from vertical during the glide (matching user-requested feel
+    // of a significantly inclined, cross-range-heavy descent). The pilot uses fins to fine-steer.
+    // Ultra-weak (1.2e-5) so the natural equilibrium is a steep lean, not a vertical drop.
+    aacc -= 1.2e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
   }
   s.angv += aacc * dt;
   s.ang += s.angv * dt;
@@ -3718,46 +3717,47 @@ function drawBooster() {
       return;
     }
 
-    // NG LANDING LEGS — A-frame truss design (matched to reference images):
-    // Two struts per side forming a triangle (main strut + brace), hinged from the gold aft skirt,
-    // deploying outward. Wide DARK-RED rectangular footpads at the base. Silver/gray struts.
-    const skirtY = -2;               // hinge point: bottom of the gold aft skirt (near the nozzles)
-    const upperHinge = -vH * 0.12;   // upper hinge (brace attaches higher on the body, inside the skirt)
-    const legLen = vH * 0.22;        // total strut length (m) when deployed
-    const splay = 1.20;              // deployed splay angle (wider than old design — matches reference)
-    const padW = 3.8;                // footpad width (m) — the wide red pads from the reference
-    const padH = 0.7;               // footpad thickness
-    const bodyHalf = vH * 0.06;     // half-width of the body at the skirt (where legs hinge)
+    // NG LANDING LEGS — SPIDER / PISTON STYLE (from reference images). Thick dark curved tubular
+    // struts that EXTEND DOWNWARD out of recesses in the aft body (NOT a hinge-swing). Like spider
+    // legs or telescoping outriggers that push straight down and slightly outward. Multiple per side.
+    // When stowed they're inside the body; when deployed they slide/piston DOWN.
+    const bodyW = vH * 0.065;          // body half-width at the aft skirt
+    const legExt = vH * 0.20 * e;     // how far the legs have extended (0 = stowed inside, full = out)
+    const nLegs = 3;                   // 3 visible per side in the 2D view (6 total around the body)
+    const tubeW = 1.4;                 // tube thickness (world m) — chunky
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
     for (const s of [-1, 1]) {
-      // deployment angle: stowed = parallel to body (a=PI), deployed = splayed out
-      const a = Math.PI - e * (Math.PI - splay);
-      const dx = s * Math.sin(a), dy = Math.cos(a);
+      for (let i = 0; i < nLegs; i++) {
+        // Each leg exits from a slot in the aft skirt, slightly spread around the circumference.
+        // In 2D side view: inner legs are more vertical, outer legs splay more.
+        const spread = 0.6 + i * 0.5;   // how far out this leg splays (inner=0.6, outer=1.6)
+        const slotX = s * (bodyW * (0.4 + i * 0.3));   // where it exits the body
+        const slotY = -1;                               // exits from the base of the aft skirt
 
-      // MAIN STRUT (outer): from the skirt hinge to the footpad
-      const hx = s * bodyHalf, hy = skirtY;
-      const fx = hx + dx * legLen, fy = hy + dy * legLen;
+        // The leg extends DOWNWARD and slightly outward (spider piston motion, not a swing)
+        const footX = slotX + s * spread * legExt * 0.3;   // slight outward splay as it extends
+        const footY = slotY + legExt;                       // extends DOWN
 
-      // BRACE STRUT (inner): from a higher point on the body to the same footpad (forms the A)
-      const bx = s * bodyHalf * 0.5, by = upperHinge;
-      // brace meets the main strut at about 70% down its length (the "knee")
-      const kx = hx + dx * legLen * 0.72, ky = hy + dy * legLen * 0.72;
+        // Thick dark tube (the main structural tube — black/dark gray, chunky)
+        ctx.strokeStyle = '#2a2e33';
+        ctx.lineWidth = tubeW - i * 0.2;   // outer legs slightly thinner (perspective hint)
+        ctx.beginPath(); ctx.moveTo(slotX, slotY); ctx.lineTo(footX, footY); ctx.stroke();
 
-      // Draw struts (silver/gray metallic, like the reference)
-      ctx.strokeStyle = '#9aa3ac'; ctx.lineWidth = 1.0; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(fx, fy); ctx.stroke();        // main strut
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(kx, ky); ctx.stroke();        // brace strut
-      // cross-brace (the horizontal tie between main + brace at the knee)
-      ctx.lineWidth = 0.6;
-      ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+        // A slight curve/bend at the knee (spider-like, matching the reference's curved struts)
+        const kneeX = slotX + s * spread * legExt * 0.12;
+        const kneeY = slotY + legExt * 0.55;
+        ctx.strokeStyle = '#3a3f46'; ctx.lineWidth = tubeW * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(slotX, slotY);
+        ctx.quadraticCurveTo(kneeX - s * 0.8, kneeY - 1, footX, footY);
+        ctx.stroke();
 
-      // FOOTPAD: wide, dark-red/maroon rectangular pad (matches reference images)
-      if (e > 0.3) {
-        ctx.fillStyle = '#8b1a1a';   // dark red/maroon (matches the reference footpad color)
-        const px0 = fx - s * padW * 0.3, py0 = fy - padH / 2;
-        ctx.fillRect(px0 - padW / 2, py0, padW, padH);
-        ctx.strokeStyle = '#4a0e0e'; ctx.lineWidth = 0.3;
-        ctx.strokeRect(px0 - padW / 2, py0, padW, padH);
+        // Rounded foot (cylindrical tip, not a flat pad)
+        if (e > 0.3) {
+          ctx.fillStyle = '#1a1e22';
+          ctx.beginPath(); ctx.arc(footX, footY, tubeW * 0.55, 0, Math.PI * 2); ctx.fill();
+        }
       }
     }
   }
