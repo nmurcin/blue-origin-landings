@@ -1710,7 +1710,11 @@ function stepPhysics(s, dt, thr, tq, fin) {
     //   (signed normal-flow fraction). Net lift with no input lets a flatter, higher-AoA glide
     //   carry the booster farther downrange/cross-range — the core New Glenn descent mechanic.
     const aoa = spd > 1 ? (vno / spd) : 0;
-    const Fstrake = STRAKE_K * r * spd * spd * aoa * atmoT;
+    // 9×4 has STRONGER strake authority (user-requested belly-flop / high-AoA cross-range feel):
+    // leaning the body flies it cross-range MORE than the 7×2, intentionally arcade-fun even if
+    // not strictly realistic. The lift acts perpendicular to velocity (correct public aero rule).
+    const sk = mode === 'tower' ? STRAKE_K * 1.8 : STRAKE_K;
+    const Fstrake = sk * r * spd * spd * aoa * atmoT;
     ax += Fstrake * nxx / m;
     ay += Fstrake * nxy / m;
   }
@@ -4225,18 +4229,23 @@ function flightHint() {
     hint = SHIP_MODE ? '⚠ HEAT — ROLL THE BELLY INTO THE WIND' : '⚠ HEAT — ENGINES INTO THE WIND, FLY HER STRAIGHT';
     warn = true;
   }
-  else if (SHIP_MODE) {
-    // Starship at Mars: entry → belly → flip → burn
-    if (b.y > ENTRY_Y + 1200) hint = 'MARS ARRIVAL — ' + (MOBILE ? MSTEER + ' to steer' : 'RCS ← →') + ', aim for the entry gate';
-    else if (b.y > ENTRY_Y - 800) { hint = 'ENTRY — belly into the wind'; warn = vDeg < 55; }
-    else if (b.y > FLIP_Y + 300 && vDeg > 55) hint = 'The air is 1% of Earth\'s — the flaps barely bite. Line up early';
-    else if (vDeg > 55) { hint = 'FLIP — swing vertical with ' + STEER_K + ', hold ' + BURN_K + ' to power it'; warn = b.y < FLIP_Y - 800; }
-    else {
+  else if (mode === 'mars') {
+    // Blue Moon MK1 lunar descent (Apollo-style approach): lander-appropriate hints only.
+    const OK = MK1_OK, spd = Math.hypot(b.vx, b.vy);
+    if (spd > 80) {
+      hint = 'RETROGRADE BRAKE — tilt the engine against your velocity (' + STEER_K + '), hold ' + BURN_K;
+      warn = b.y < 2500;
+    } else if (spd > 30) {
+      hint = 'Killing speed — when you\'re slow, pitch vertical for the final descent';
+    } else if (b.y > 800) {
+      hint = 'COAST — engine off; let gravity pull you toward the pad, save fuel';
+    } else {
       const stop = predictBurnStop();
-      if (b.thr < 0.1 && stop && stop.y < 200) { hint = '⚠ BURN NOW — hold ' + BURN_K; warn = true; }
-      else if (b.thr < 0.1) hint = 'Supersonic retropropulsion — the only thing that stops you here';
-      else hint = 'Set her on the pad under ' + OCEAN_OK.vy + ' m/s, tilt < ' + OCEAN_OK.ang + '°';
+      if (b.thr < 0.1 && stop && stop.y < 180) { hint = '⚠ BURN NOW — hold ' + BURN_K; warn = true; }
+      else if (b.thr > 0.1) hint = 'Set her down soft — under ' + OK.vy + ' m/s, tilt < ' + OK.ang + '°';
+      else hint = 'Ease down — save fuel, burn late';
     }
+    return { hint, warn };
   }
   else if (b.t < 0.55) hint = 'STAGE SEPARATION...';
   else if (b.t < 4 && Math.abs(b.angv) > 0.12) { hint = MOBILE ? 'TUMBLING — ' + MSTEER + ' against the spin' : 'TUMBLING — kill the spin with ← →'; warn = true; }
