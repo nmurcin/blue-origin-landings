@@ -1594,10 +1594,10 @@ function newRun(m) {
     // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(14000 + Math.random() * 1000) * T().bAltMul,  // starts ~14-15 km LEFT — long strake glide to reach Jacklyn
-      y: (11500 + Math.random() * 400) * T().bAltMul,
-      vx: (180 + Math.random() * 30) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
-      vy: -60 * T().bSpdMul,                             // slight descent; mostly horizontal (downrange glide)
+      x: -(10500 + Math.random() * 1000) * T().bAltMul,  // ~10.5-11.5 km LEFT — long strake glide to Jacklyn
+      y: (13000 + Math.random() * 400) * T().bAltMul,
+      vx: (550 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier, hotter Mach-class entry)
+      vy: -(600 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
       ang: -15 * Math.PI / 180,   // slight lean toward the deck (body tilted for strake lift)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -1617,10 +1617,10 @@ function newRun(m) {
     // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
     // closer version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(9000 + Math.random() * 800) * T().bAltMul,   // ~9-10 km LEFT — a real glide to reach Jacklyn
-      y: (9800 + Math.random() * 300) * T().bAltMul,
-      vx: (140 + Math.random() * 20) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
-      vy: -40 * T().bSpdMul,                             // slight descent (mostly horizontal)
+      x: -(8500 + Math.random() * 800) * T().bAltMul,   // ~8.5-9 km LEFT — a real glide to reach Jacklyn
+      y: (11000 + Math.random() * 400) * T().bAltMul,
+      vx: (450 + Math.random() * 40) * T().bSpdMul,     // FAST downrange (Mach-class energy) → long glide
+      vy: -(480 + Math.random() * 60) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up
       ang: 45 * Math.PI / 180,   // angled up-and-right (just separated from the stack, launch attitude)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -1715,7 +1715,7 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // ratio > 1 — the strakes don't just lift, they also reduce effective drag at moderate AoA,
     // letting the booster fly FURTHER in the direction it's going). This gives the "point it
     // where you want to go and it flies there" feel. Scales with AoA: best at moderate lean.
-    const glideK = 0.35;   // 35% of lift force also pushes along the velocity (L/D effect)
+    const glideK = 0.90;   // 90% of lift also pushes along velocity (L/D effect) — strong glider-like reach
     const fvx = rvx / spd, fvy = rvy / spd;   // unit vector along velocity
     ax += Fstrake * glideK * fvx / m;
     ay += Fstrake * glideK * fvy / m;
@@ -4201,7 +4201,7 @@ function flightHint() {
   const BURN_K = MOBILE ? 'BURN' : 'SPACE / ↑';
   const STEER_K = MOBILE ? 'steer' : '← →';
   if (b.heatFrac > 0.85) {
-    hint = SHIP_MODE ? '⚠ HEAT — ROLL THE BELLY INTO THE WIND' : '⚠ HEAT — ENGINES INTO THE WIND, FLY HER STRAIGHT';
+    hint = SHIP_MODE ? '⚠ HEAT — ROLL THE BELLY INTO THE WIND' : '⚠ OVERHEATING — DECEL BURN NOW (' + BURN_K + ') or she burns up!';
     warn = true;
   }
   else if (mode === 'mars') {
@@ -4227,7 +4227,7 @@ function flightHint() {
   else if (b.vx > 40) {
     // Two-burn NG descent (DECEL → coast → LANDING): hint based on altitude + speed
     if (b.y > T().entryY && Math.hypot(b.vx, b.vy) > 100)
-      hint = 'DECEL BURN — 3 engines retrograde (' + STEER_K + ' to aim), hold ' + BURN_K + ' to brake';
+      hint = 'DECEL BURN (REQUIRED) — retrograde (' + STEER_K + '), hold ' + BURN_K + ' to bleed speed or you\'ll burn up';
     else if (b.y > 2500)
       hint = 'COAST — ride the strakes toward Jacklyn, steer the ✕ onto the target';
     else if (b.thr < 0.1)

@@ -18,11 +18,11 @@ TIERS = {
 VEHICLES = {
     'ocean': {'DRY': 180000, 'FUEL': 70000, 'THR': 4.0e6, 'MDOT': 1200, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 150, 'CDA_LAT': 360,
-              'spawn': {'x': -4000, 'y': 9800, 'vx': 140, 'vy': -40},
+              'spawn': {'x': -8500, 'y': 11000, 'vx': 450, 'vy': -480},
               'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44},
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
-              'spawn': {'x': -7000, 'y': 11500, 'vx': 180, 'vy': -60},
+              'spawn': {'x': -10500, 'y': 13000, 'vx': 550, 'vy': -600},
               'STRAKE_MULT': 1.35,
               'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
@@ -34,6 +34,11 @@ STRAKE_K = 75
 FIN_K = 26
 RCS0 = {'ocean': 600, 'tower': 700, 'mars': 2000}
 RCS_BURN = 55
+# heat model (matches the game): q3 = rho*v^3*hRamp; burn up if damage >= 100
+HEAT_TOL_BELLY = 7.0e7
+HEAT_TOL_BARE = 1.4e7
+HEAT_DMG_DIV = 1.2e6
+ENTRY_Y = 8500
 
 
 def rho(y, RHO0, HSCALE):
@@ -49,7 +54,7 @@ def sim_landing(mode, verbose=False):
     x, y, vx, vy = float(s['x']), float(s['y']), float(s['vx']), float(s['vy'])
     fuel, t, dt = float(FUEL), 0.0, 0.02
     SK = STRAKE_K * v.get('STRAKE_MULT', 1.0)
-    ENTRY_Y = 8500
+    dmg = 0.0; maxheat = 0.0
     ang = -0.18 if mode == 'tower' else (math.atan2(-vx, -vy) * 0.5 if mode == 'mars' else 0.4)
 
     while y > 0 and t < 600:
@@ -60,6 +65,7 @@ def sim_landing(mode, verbose=False):
         # atmosphere + drag + strake lift
         r = rho(y, RHO0, HSCALE)
         atmoT = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
+        vno = 0.0
         if r > 0:
             axx, axy = math.sin(ang), math.cos(ang)
             nxx, nxy = axy, -axx
@@ -71,8 +77,12 @@ def sim_landing(mode, verbose=False):
             ay += (Fax * axy + Fno * nxy) / m
             aoa = (vno / sp) if sp > 1 else 0
             Fs = SK * r * sp * sp * aoa * atmoT
-            ax += Fs * nxx / m
-            ay += Fs * nxy / m
+            # lift perpendicular to velocity + glide-extension along velocity (matches the game)
+            glideK = 0.90
+            lvx, lvy = -vy / sp, vx / sp        # perpendicular to velocity
+            fvx, fvy = vx / sp, vy / sp          # along velocity
+            ax += Fs * lvx / m + Fs * glideK * fvx / m
+            ay += Fs * lvy / m + Fs * glideK * fvy / m
 
         # AUTOPILOT: mode-appropriate strategy
         stop_dist = vy * vy / (2 * max(0.01, THR / m - G)) if THR / m > G else 1e9
@@ -89,20 +99,18 @@ def sim_landing(mode, verbose=False):
                 thr = min(1.0, max(0.3, (-vy - 2) / 15))  # ease down to vy≈-2
             else:
                 ang = 0; thr = 0  # coast (save fuel)
-        elif mode == 'tower':
-            # Downrange: coast with strakes, then retro near the deck
-            if y < stop_dist * 1.15 and vy < -5:
-                ang = math.atan2(-vx, -vy) * 0.5; thr = 1.0
-            elif y < 3000 and abs(vx) > 15:
-                ang = math.atan2(-vx, 0) * 0.4; thr = 0.6
-            else:
-                ang = -0.18; thr = 0
-        else:
-            # Ocean: retro to kill horizontal, coast, then vertical arrest
-            if abs(vx) > 30:
-                ang = math.atan2(-vx, 0); thr = 1.0
-            elif y < stop_dist * 1.15 and vy < -5:
-                ang = max(-0.1, min(0.1, -vx * 0.01)); thr = 1.0
+        elif mode in ('tower', 'ocean'):
+            # Downrange droneship landing: DECEL BURN (retrograde, high + fast) to survive reentry
+            # heat, then GLIDE toward the deck, then terminal vertical arrest.
+            dist = -x
+            if sp > 350 and y > ENTRY_Y - 500:
+                ang = math.atan2(-vx, -vy); thr = 1.0                 # DECEL BURN (retrograde brake)
+            elif y < stop_dist * 1.15 and vy < -4:
+                ang = max(-0.12, min(0.12, -vx * 0.01)); thr = 1.0   # terminal vertical arrest
+            elif dist > 500:
+                ang = 30 * math.pi / 180; thr = 0                     # glide right toward the deck
+            elif abs(vx) > 12:
+                ang = math.atan2(-vx, 0) * 0.3; thr = 0.5             # kill residual drift near deck
             else:
                 ang = 0; thr = 0
 
@@ -112,7 +120,22 @@ def sim_landing(mode, verbose=False):
             ay += T * math.cos(ang) / m
             fuel = max(0, fuel - MDOT * thr * dt)
 
+        # reentry heat (booster protected engines-first; broadside burns). Skip for vacuum (mars).
+        if RHO0 > 0:
+            hRamp = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
+            q3 = r * sp ** 3 * hRamp
+            belly = abs(vno) / sp if sp > 1 else 1
+            safe = 1 - belly
+            tol = HEAT_TOL_BARE + (HEAT_TOL_BELLY - HEAT_TOL_BARE) * safe * safe
+            if q3 > tol:
+                dmg += (q3 - tol) / HEAT_DMG_DIV * dt
+            maxheat = max(maxheat, q3 / tol)
+
         vx += ax * dt; vy += ay * dt; x += vx * dt; y += vy * dt; t += dt
+        if dmg >= 100:
+            return False, {'mode': mode, 'result': 'BURNED UP', 'maxheat': round(maxheat, 1),
+                           'vy': 999, 'vx': 999, 'x': round(x), 'fuel': round(fuel), 't': round(t, 1),
+                           'on_deck': False, 'vy_ok': False, 'vx_ok': False}
 
     result = {
         'mode': mode, 'vy': round(-vy, 1), 'vx': round(abs(vx), 1),
@@ -125,6 +148,67 @@ def sim_landing(mode, verbose=False):
         print(f"  {mode}: vy={result['vy']} (OK<={v['OK_vy']} {'PASS' if result['vy_ok'] else 'FAIL'}) "
               f"vx={result['vx']} x={result['x']} fuel={result['fuel']} t={result['t']}s")
     return success, result
+
+
+def _sim_heat(mode, do_decel):
+    """Sim a booster reentry, optionally doing a decel burn. Returns (burned_up, maxheat)."""
+    v = VEHICLES[mode]
+    DRY, FUEL, THR, MDOT, G = v['DRY'], v['FUEL'], v['THR'], v['MDOT'], v['G']
+    CDA_AX, CDA_LAT = v['CDA_AX'], v['CDA_LAT']
+    SK = STRAKE_K * v.get('STRAKE_MULT', 1.0)
+    s = v['spawn']
+    x, y, vx, vy = float(s['x']), float(s['y']), float(s['vx']), float(s['vy'])
+    fuel, t, dt = float(FUEL), 0.0, 0.02
+    dmg = 0.0; maxheat = 0.0
+    while y > 0 and t < 400:
+        m = DRY + fuel
+        r = rho(y, 1.225, 8500)
+        sp = math.hypot(vx, vy) or 1e-9
+        atmoT = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
+        # decel burn (retrograde) high + fast; otherwise just glide (no braking)
+        if do_decel and sp > 350 and y > ENTRY_Y - 500:
+            ang = math.atan2(-vx, -vy); thr = 1.0
+        else:
+            ang = 30 * math.pi / 180 if -x > 500 else 0.0; thr = 0
+        axx, axy = math.sin(ang), math.cos(ang)
+        nxx, nxy = axy, -axx
+        vax = vx * axx + vy * axy; vno = vx * nxx + vy * nxy
+        Fax = -0.5 * r * CDA_AX * abs(vax) * vax
+        Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
+        ax = (Fax * axx + Fno * nxx) / m; ay = -G + (Fax * axy + Fno * nxy) / m
+        aoa = vno / sp if sp > 1 else 0
+        Fs = SK * r * sp * sp * aoa * atmoT
+        ax += Fs * (-vy / sp) / m + Fs * 0.90 * (vx / sp) / m
+        ay += Fs * (vx / sp) / m + Fs * 0.90 * (vy / sp) / m
+        if thr > 0 and fuel > 0:
+            ax += THR * thr * math.sin(ang) / m; ay += THR * thr * math.cos(ang) / m
+            fuel = max(0, fuel - MDOT * thr * dt)
+        hRamp = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
+        q3 = r * sp ** 3 * hRamp
+        belly = abs(vno) / sp if sp > 1 else 1; safe = 1 - belly
+        tol = HEAT_TOL_BARE + (HEAT_TOL_BELLY - HEAT_TOL_BARE) * safe * safe
+        if q3 > tol: dmg += (q3 - tol) / HEAT_DMG_DIV * dt
+        maxheat = max(maxheat, q3 / tol)
+        vx += ax * dt; vy += ay * dt; x += vx * dt; y += vy * dt; t += dt
+        if dmg >= 100: return True, maxheat
+    return False, maxheat
+
+
+def test_decel_burn_required():
+    """Verify the NG decel burn is MANDATORY: skipping it burns the booster up (heat), while doing
+    it keeps the vehicle survivable. This is the faithful-to-NG mechanic the user requested."""
+    ok = True
+    for mode in ('ocean', 'tower'):
+        burned_no, heat_no = _sim_heat(mode, do_decel=False)
+        burned_yes, heat_yes = _sim_heat(mode, do_decel=True)
+        # want: no-decel BURNS UP, with-decel SURVIVES the heat
+        good = burned_no and not burned_yes
+        print(f"  {mode}: no-decel={'BURNED UP' if burned_no else 'survived'} ({heat_no:.1f}x tol), "
+              f"with-decel={'BURNED UP' if burned_yes else 'survived'} ({heat_yes:.1f}x tol) "
+              f"{'PASS' if good else 'FAIL'}")
+        if not good:
+            ok = False
+    return ok
 
 
 def test_mdot_consistency():
@@ -167,6 +251,10 @@ def main():
     twr_ok = test_twr_sane()
     print(f"   {'PASS' if twr_ok else 'FAIL'}\n")
 
+    print("2b. Decel burn required (no burn = burn up; with burn = survive):")
+    reach_ok = test_decel_burn_required()
+    print(f"   {'PASS' if reach_ok else 'FAIL'}\n")
+
     print("3. Landability (autopilot sim, each mission):")
     land_ok = True
     for mode in modes:
@@ -176,7 +264,7 @@ def main():
             land_ok = False
     print(f"   {'PASS -- all missions landable' if land_ok else 'FAIL -- see above'}\n")
 
-    all_pass = mdot_ok and twr_ok and land_ok
+    all_pass = mdot_ok and twr_ok and reach_ok and land_ok
     print(f"{'ALL TESTS PASS' if all_pass else 'SOME TESTS FAILED'}")
     sys.exit(0 if all_pass else 1)
 
