@@ -3161,57 +3161,60 @@ function drawGround() {
     }
     ctx.restore();
   } else if (mode === 'mars' || (mode === 'moon' && b && b.phase === 'lunardesc')) {
-    // gray lunar regolith plain with a landing pad beside a small outpost (MK1 and MK2 both land here)
+    // LUNAR SOUTH POLE: dark regolith with MANY craters; the landing site is the floor of a
+    // gently-sloping crater at x=0. Water ice decorations at the target. No pad, no infrastructure.
     const deep = Math.min(H, gy + Math.max(300 * devicePixelRatio, 1500 * cam.s));
     const g = ctx.createLinearGradient(0, gy, 0, deep);
-    g.addColorStop(0, '#9a9ea3');
-    g.addColorStop(0.12, '#75787d');
-    g.addColorStop(0.5, '#43454a');
-    g.addColorStop(1, '#15171a');
+    g.addColorStop(0, '#6a6e74');
+    g.addColorStop(0.12, '#4a4d52');
+    g.addColorStop(0.5, '#2a2d31');
+    g.addColorStop(1, '#0c0e11');
     ctx.fillStyle = g;
     surfacePath(true);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(220,224,230,0.45)';
+    ctx.strokeStyle = 'rgba(180,185,192,0.35)';
     ctx.lineWidth = Math.max(1, 0.4 * cam.s);
     surfacePath(false);
     ctx.stroke();
     ctx.save();
     ctx.translate(0, -curveOff(0) * cam.s);
     const pm = (v) => Math.max(v * cam.s, v * 0.5 * devicePixelRatio);
-    // landing pad
-    const p0 = w2sX(-32), p1 = w2sX(32);
-    const pg = ctx.createLinearGradient(0, gy, 0, gy + pm(2.2));
-    pg.addColorStop(0, '#9aa1a6');
-    pg.addColorStop(1, '#5d646a');
-    ctx.fillStyle = pg;
-    ctx.fillRect(p0, gy, p1 - p0, pm(2.2));
-    ctx.strokeStyle = '#e8b93c';
-    ctx.lineWidth = Math.max(1.2 * devicePixelRatio, 0.6 * cam.s);
-    ctx.beginPath();
-    ctx.ellipse(w2sX(0), gy + pm(0.6), pm(12), pm(0.5), 0, 0, Math.PI * 2);
-    ctx.stroke();
-    // craters (decorative depressions in the regolith — harder to land near the rim)
-    ctx.strokeStyle = 'rgba(50,55,62,0.6)'; ctx.lineWidth = Math.max(1, 0.4 * cam.s);
-    for (const [cx2, r, d] of [[85, 22, 4], [-110, 35, 6], [200, 14, 3], [-60, 10, 2], [280, 28, 5]]) {
-      const scx = w2sX(cx2), scr = pm(r);
-      if (scx < -scr || scx > W + scr) continue;   // off-screen cull
-      ctx.beginPath(); ctx.ellipse(scx, gy + pm(d * 0.4), scr, pm(d * 0.8), 0, 0, Math.PI); ctx.stroke();
-      ctx.fillStyle = 'rgba(30,32,36,0.25)';
-      ctx.beginPath(); ctx.ellipse(scx, gy + pm(d * 0.4), scr * 0.9, pm(d * 0.5), 0, 0, Math.PI); ctx.fill();
+    // MANY craters (procedural, world-anchored, covers the whole visible surface)
+    ctx.strokeStyle = 'rgba(50,55,62,0.7)'; ctx.lineWidth = Math.max(1, 0.4 * cam.s);
+    const viewW = W / (cam.s || 1), leftC = Math.floor((cam.x - viewW / 2) / 80) * 80;
+    for (let wx = leftC; wx < cam.x + viewW / 2 + 80; wx += 80) {
+      const cr = 12 + h01(wx * 0.37) * 40;   // crater radius 12-52 m
+      const cd = 2 + h01(wx * 0.81) * 5;     // crater depth (visual)
+      if (h01(wx * 0.53) < 0.35) continue;   // skip ~35% of slots for variety
+      const scx = w2sX(wx + h01(wx * 1.2) * 40 - 20), scr = pm(cr);
+      if (scx < -scr * 2 || scx > W + scr * 2) continue;
+      ctx.beginPath(); ctx.ellipse(scx, gy + pm(cd * 0.3), scr, pm(cd * 0.7), 0, 0, Math.PI); ctx.stroke();
+      ctx.fillStyle = 'rgba(20,22,26,0.3)';
+      ctx.beginPath(); ctx.ellipse(scx, gy + pm(cd * 0.3), scr * 0.85, pm(cd * 0.45), 0, 0, Math.PI); ctx.fill();
     }
-    // scattered rocks, world-anchored
-    if (cam.s > 0.45) {
-      const viewW = W / cam.s;
-      const left = Math.floor((cam.x - viewW / 2) / 11) * 11;
-      for (let wx = left; wx < cam.x + viewW / 2 + 11; wx += 11) {
-        const h = h01(wx * 0.617);
-        if (h < 0.55) continue;
-        if (wx > -40 && wx < 260) continue;   // keep the pad and base clear
-        const depth = 1.5 + h01(wx) * 24;
+    // the TARGET landing site at x=0: floor of a gentle crater with WATER ICE decorations
+    const lsx = w2sX(0), lsr = pm(45);
+    // gentle crater depression (the landing zone)
+    ctx.fillStyle = 'rgba(15,18,22,0.4)';
+    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI); ctx.fill();
+    ctx.strokeStyle = 'rgba(100,110,120,0.5)'; ctx.lineWidth = Math.max(1, 0.35 * cam.s);
+    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI); ctx.stroke();
+    // water ice patches (pale blue-white spots in the crater floor — the reason we're landing here)
+    ctx.fillStyle = 'rgba(200,230,255,0.55)';
+    for (const [ox, ow] of [[-18,8],[-5,12],[10,6],[22,9],[-30,5]]) {
+      ctx.beginPath(); ctx.ellipse(w2sX(ox), gy + pm(2.5), pm(ow), pm(1.2), 0, 0, Math.PI * 2); ctx.fill();
+    }
+    // small rocks + boulders (scattered)
+    if (cam.s > 0.35) {
+      const left = Math.floor((cam.x - viewW / 2) / 14) * 14;
+      for (let wx = left; wx < cam.x + viewW / 2 + 14; wx += 14) {
+        const rh = h01(wx * 0.617);
+        if (rh < 0.5) continue;
+        const depth = 1.5 + h01(wx) * 18;
         const sy2 = gy + depth * cam.s;
         if (sy2 > H) continue;
-        ctx.fillStyle = h > 0.8 ? 'rgba(40,42,46,0.7)' : 'rgba(110,114,120,0.6)';
-        ctx.fillRect(w2sX(wx), sy2, Math.max(2, (0.8 + h01(wx * 1.7) * 2.2) * cam.s), Math.max(1.5, (0.5 + h01(wx * 2.3)) * cam.s));
+        ctx.fillStyle = rh > 0.8 ? 'rgba(35,38,42,0.7)' : 'rgba(85,90,96,0.6)';
+        ctx.fillRect(w2sX(wx), sy2, Math.max(2, (0.7 + h01(wx * 1.7) * 2) * cam.s), Math.max(1.5, (0.4 + h01(wx * 2.3)) * cam.s));
       }
     }
     ctx.restore();
@@ -5452,14 +5455,15 @@ function drawMoonTimeline() {
 }
 function drawTimeline() {
   if (mode === 'moon') { drawMoonTimeline(); return; }
-  const segs = SHIP_MODE ? [
-    { label: 'COAST', from: 11800, to: ENTRY_Y, frac: 0.18 },
-    { label: 'ENTRY', from: ENTRY_Y, to: FLIP_Y, frac: 0.32 },
-    { label: 'FLIP',  from: FLIP_Y, to: 1500, frac: 0.26 },
-    { label: 'LAND',  from: 1500, to: 0, frac: 0.24 }
+  const segs = mode === 'mars' ? [
+    // MK1 Apollo descent: brake retrograde, coast ballistic arc, pitchover + vertical descent
+    { label: 'RETRO BRAKE', from: 5500, to: 2500, frac: 0.35 },
+    { label: 'COAST',       from: 2500, to: 800,  frac: 0.30 },
+    { label: 'DESCENT',     from: 800,  to: 0,    frac: 0.35 }
   ] : [
-    { label: 'BOOSTBACK',   from: 14000, to: ENTRY_Y, frac: 0.32 },
-    { label: 'FIN DESCENT', from: ENTRY_Y, to: 1300, frac: 0.44 },
+    // NG booster: boostback to aim, fin/strake glide to the deck, late landing burn
+    { label: 'BOOSTBACK',   from: 14000, to: T().entryY, frac: 0.32 },
+    { label: 'FIN DESCENT', from: T().entryY, to: 1300, frac: 0.44 },
     { label: 'LAND', from: 1300, to: 0, frac: 0.24 }
   ];
   // on phones the timeline hugs the left edge and stops above the chips
