@@ -4326,7 +4326,7 @@ function drawControlsLegend() {
   const dim = 'rgba(255,255,255,0.55)', keyC = 'rgba(255,255,255,0.95)', amber = '#e8b93c', viewC = '#a9d4ff';
   const fmtW = w => '×' + w;
   // [status text, status colour, key]
-  const rows = [[orbital ? 'burn' : 'throttle', dim, 'SPACE'], ['steer', dim, '← →']];
+  const rows = [[orbital ? 'burn' : 'throttle', dim, 'SPACE'], ['steer', dim, '← →'], ['pause', dim, 'P']];
   if (mode === 'moon' && !orbital && !b.staged) rows.push(['stage', dim, 'B']);
   if (mode === 'moon') {
     const wv = WARP_STEPS[warpIdx];   // one ladder, every stage; Z snaps back to ×1
@@ -6069,7 +6069,7 @@ function drawDone() {
                : mode === 'moon' ? (save.bestMoon || 0) : save.bestMars;
     hudText(result.score >= best ? '★ NEW BEST' : 'best ' + best, pcx, y, 13, '#8fa0ae', 'center'); y += px(20);
     if (mode === 'ocean' && save.oceanWins === UNLOCK_WINS) {
-      hudText('TOWER CATCH UNLOCKED — press M, then 2', pcx, y + px(8), 14, '#e8b93c', 'center'); y += px(22);
+      hudText('9×4 UNLOCKED — ready for the harder variant? press M', pcx, y + px(8), 14, '#e8b93c', 'center'); y += px(22);
     }
   }
   // 1v1 clap-back / encouragement when this run answered a challenge
