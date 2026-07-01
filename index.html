@@ -1656,14 +1656,15 @@ function newRun(m) {
   // Controls are LOCKED. At OPEN_SEP the stage separates (GS2 ignites, climbs prograde up-and-right);
   // at OPEN_CTRL control hands off to the player. b.openT counts up; b.opening ends at OPEN_CTRL.
   if (m === 'ocean' || m === 'tower') {
-    b.opening = true; b.openT = 0; b.openSep = false;
-    // Open the stack HIGH and SLOW, well above the atmosphere (ENTRY_Y+~4km) so the ~3.4s locked
-    // opening + separation plays out before any reentry heating — the player gets control with
-    // plenty of altitude to set up the decel burn. Momentum is scaled down for the coast; the
-    // full descent energy builds as it falls.
-    b.y = ENTRY_Y + 4500 + Math.random() * 600;   // safely above the heating interface
-    b.vx *= 0.5; b.vy = -60;                        // gentle prograde coast at the top of the arc
-    b.ang = 20 * Math.PI / 180;   // stack coasting prograde (up-and-right), pre-flip attitude
+    b.opening = true; b.openT = 0; b.openSep = false; b.openMeco = false;
+    // Open with the mated stack UNDER POWER, climbing up-and-right, well above the atmosphere so
+    // the whole launch beat (FIRING → MECO → SEP → GS2 ignition → handoff) plays out before any
+    // reentry heating. Start it ascending (vy>0) at a shallow prograde tilt so the GS1 burn visibly
+    // pushes it up; after MECO + separation it arcs over and begins the fall the player will fly.
+    b.y = ENTRY_Y + 4000 + Math.random() * 500;   // safely above the heating interface
+    b.vx = Math.abs(b.vx) * 0.45;                  // moderate downrange (rightward) speed
+    b.vy = 120;                                     // ASCENDING at open (GS1 still pushing up)
+    b.ang = 22 * Math.PI / 180;   // shallow prograde lean (up-and-right) — launch/ascent attitude
     ship = { x: 0, y: 0, vx: 0, vy: 0, ang: b.ang, t: 0, sep: false, mated: true };
   } else {
     b.opening = false;
@@ -1672,9 +1673,10 @@ function newRun(m) {
   cam.x = b.x; cam.y = b.y * 0.62; cam.s = H / 30000;
   scene = 'flying';
 }
-// Opening-sequence timing (seconds).
-const OPEN_SEP = 1.8;    // stack coasts, then GS2 separates + ignites
-const OPEN_CTRL = 3.4;   // ~1.6s after separation, controls hand off to the player
+// Opening-sequence timing (seconds): FIRING → MECO → coast → SEP → GS2 ignite → HANDOFF.
+const OPEN_MECO = 2.2;   // GS1 engines cut (main engine cutoff)
+const OPEN_SEP  = 3.0;   // stage separation (GS2 detaches)
+const OPEN_CTRL = 4.6;   // controls hand off to the player (falling GS1 is yours)
 
 function wind(h) {
   return env.windBase * (0.55 + 0.45 * Math.sin(h * 0.00045 + env.windPhase))
@@ -2546,14 +2548,25 @@ function update(dt) {
 
   b.t += dt;
   // keyboard is bang-bang; the drag-dot slider is analog (-1..1) into the same channel
-  // STACKED OPENING: coast the mated stack, separate, then hand off control. While opening,
-  // the player's stick/throttle are ignored (controls locked) and the stack flies ballistically.
+  // STACKED OPENING — a real launch sequence (controls locked throughout):
+  //   FIRING  (0 .. OPEN_MECO):  GS1 engines lit, mated stack climbing up-and-right under power.
+  //   MECO    (OPEN_MECO):       GS1 engines cut — visible flame-out + shake.
+  //   COAST   (.. OPEN_SEP):     brief unpowered coast.
+  //   SEP     (OPEN_SEP):        GS2 detaches at the interstage seam.
+  //   GS2 IGN (.. OPEN_CTRL):    GS2 lights and climbs away to orbit.
+  //   HANDOFF (OPEN_CTRL):       "YOU HAVE CONTROL" — the falling GS1 is yours.
+  let openThr = 0;   // engine throttle the opening script commands on GS1 (overrides player input)
   if (b.opening) {
     b.openT += dt;
+    if (b.openT < OPEN_MECO) {
+      openThr = 1;                             // GS1 FIRING (mated ascent)
+    } else if (!b.openMeco) {
+      b.openMeco = true; openThr = 0;          // MECO — engines cut
+      shakeT = Math.max(shakeT, 0.12);
+    }
     if (!b.openSep && b.openT >= OPEN_SEP) {
-      // SEPARATION: GS2 lights and springs prograde (up-and-right); GS1 gets a small kick back.
-      // Spawn GS2 exactly where the upper stage sat in the mated silhouette (the gold interstage
-      // seam, ~cut height up the body axis) so it peels off smoothly instead of teleporting.
+      // SEPARATION: GS2 detaches at the gold interstage seam (where it sat in the mated silhouette)
+      // with a gentle spring, then lights its own engines and climbs prograde.
       b.openSep = true;
       const seam = 62 * (mode === 'tower' ? 0.540 : 0.588);   // seam height up the body axis (world m; 62 = NG_H)
       if (ship) { ship.sep = true; ship.mated = false; ship.t = 0;
@@ -2578,9 +2591,12 @@ function update(dt) {
   // smoothly — quick to engage, gentle to release
   b.fin += (tq - b.fin) * Math.min(1, dt * (tq !== 0 ? 4 : 1.8));
   if (Math.abs(b.fin) < 0.02 && !tq) b.fin = 0;
+  // During the opening, the script commands GS1's throttle (openThr: full while FIRING, 0 after
+  // MECO). Once control hands off, the player's burn key takes over.
   const burn = !locked && (keys[' '] || keys['ArrowUp'] || burnHeld);
-  b.thr += ((burn ? 1 : 0) - b.thr) * Math.min(1, dt * 8);
-  if (b.thr < 0.02 && !burn) b.thr = 0;
+  const thrCmd = locked ? openThr : (burn ? 1 : 0);
+  b.thr += (thrCmd - b.thr) * Math.min(1, dt * 8);
+  if (b.thr < 0.02 && !burn && !locked) b.thr = 0;
 
   // turbulence buffets the booster at high dynamic pressure — keep trimming!
   // (none out in space: the buffet fades in with the atmosphere)
@@ -4253,9 +4269,10 @@ function capsuleBar(x, y, w, h, frac, c0, c1, lab, labW, labColor) {
 // the one-line coach: what to do right now, phrased for the input device
 function flightHint() {
   let hint = '', warn = false;
-  // STACKED OPENING sequence prompts (NG booster modes).
+  // STACKED OPENING sequence prompts (NG booster modes): FIRING → MECO → SEP → GS2 ignition.
   if (b.opening) {
-    if (!b.openSep) hint = 'STACK COASTING — GS1 + GS2 mated · stand by for separation';
+    if (!b.openMeco) hint = 'GS1 ASCENT — 7 BE-4 firing · stand by for MECO';
+    else if (!b.openSep) hint = 'MECO — main engines cut off · stage separation next';
     else hint = 'SEPARATION — GS2 igniting to orbit · you have control in a moment';
     return { hint, warn };
   }
