@@ -3842,8 +3842,12 @@ function drawBooster() {
       }
     }
   }
-  if (mode === 'ocean') drawTracedVehicle('ng7x2', NG_H, 0.588);
-  else if (mode === 'tower') drawTracedVehicle('ng9x4', NG_H, 0.540);
+  // While the stack is still MATED (opening, pre-separation), draw the FULL rocket (GS1+GS2 as one
+  // continuous silhouette, yMax=1.0). After separation, draw ONLY the GS1 first stage (cut at the
+  // gold interstage) — the upper stage flew away as a separate climbing sprite.
+  const mated = b.opening && !b.openSep;
+  if (mode === 'ocean') drawTracedVehicle('ng7x2', NG_H, mated ? 1.0 : 0.588);
+  else if (mode === 'tower') drawTracedVehicle('ng9x4', NG_H, mated ? 1.0 : 0.540);
   else drawTracedVehicle('mk1', MK1_H);   // mars = MK1 (moon/MK2 mission removed from this build)
   // Landing legs: deploy from the aft/skirt near touchdown (same mechanic as the original Falcon 9
   // code). NG legs swing out from the gold skirt; MK1 lander legs are always deployed.
@@ -4103,6 +4107,9 @@ function drawBlueMoonMK2(detailed) {
 
 function drawShip() {
   if (!ship || !b) return;
+  // While MATED (NG opening, pre-separation), the upper stage is part of the full-rocket silhouette
+  // drawn by drawBooster — don't also draw the separate GS2 sprite on top of it.
+  if (ship.mated && !ship.sep) return;
   const ss = Math.max(cam.s, 0.42 * devicePixelRatio);
   // Render the ship's offset from the booster at sprite scale: the stack, the pop
   // and the climb-out all stay readable even when the camera is zoomed way out.
