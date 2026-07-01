@@ -2594,9 +2594,10 @@ function update(dt) {
   const spriteK = Math.max(cam.s, 0.42 * devicePixelRatio) / (cam.s || 1);
   // engine smoke/fire particles
   if (b.thr > 0.1 && Math.random() < 0.6) {
-    const eOff = (2 + Math.random() * 5) * spriteK;   // small: just off the nozzle lip
-    // thrust reaction accelerates the vehicle along (sin,cos) = nose dir, so exhaust exits the
-    // engine along -(sin,cos); spawn smoke just off that nozzle end (small offset = stays attached)
+    // Smoke spawns RIGHT AT the nozzle (engine end). The offset must be tiny and capped so
+    // it doesn't float away when zoomed out (spriteK gets large at wide zoom). Max 4 world-m.
+    const eOff = Math.min(4, (1 + Math.random() * 2) * spriteK);
+    // Engine end is along -(sin,cos) from the body origin (opposite the nose)
     const ex = b.x - Math.sin(b.ang) * eOff, ey = b.y - Math.cos(b.ang) * eOff;
     particles.push({
       x: ex, y: Math.max(ey, 0.5),
