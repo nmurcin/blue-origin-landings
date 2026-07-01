@@ -1604,16 +1604,18 @@ function newRun(m) {
     env = { windBase: 0, windGust: 0, windPhase: 0, gateX: 0 };   // no wind on the Moon
     ship = null;   // you ARE the lander
   } else if (m === 'tower') {
-    // NEW GLENN 9×4 — higher-energy, steeper entry than the 7×2: faster downrange, higher and
-    // farther out at separation, so you MUST lean on the strakes' cross-range glide to reach
-    // Jacklyn. Heavier vehicle + tighter touchdown window (see applyModeParams + evalTouchdown).
-    // Spawn scales with the realism tier (arcade = ×1; moderate/fullsim raise altitude + speed).
+    // NEW GLENN 9×4 — DOWNRANGE LANDING (like real NG on a droneship). The booster does NOT boost
+    // back; it continues its forward momentum, coast + strake-glide toward Jacklyn which is AHEAD
+    // (to the right, downrange). The player rides the strakes' cross-range lift to extend the glide
+    // and reach the deck. Spawn LEFT of the deck (negative x), moving RIGHT (positive vx) toward x=0.
+    // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
+    // Spawn scales with the realism tier.
     b = {
-      x: (3200 + Math.random() * 300) * T().bAltMul,
+      x: -(7000 + Math.random() * 600) * T().bAltMul,   // starts FAR LEFT (uprange); deck is 7+ km to the right
       y: (11500 + Math.random() * 400) * T().bAltMul,
-      vx: (230 + Math.random() * 25) * T().bSpdMul,
-      vy: 240 * (T().bSpdMul > 1 ? 0.5 : 1),   // higher tiers enter shallower (more horizontal)
-      ang: 45 * Math.PI / 180,   // stack attitude: prograde, nose up-range
+      vx: (180 + Math.random() * 30) * T().bSpdMul,     // moving RIGHT (toward the deck = downrange)
+      vy: -60 * T().bSpdMul,                             // slight descent; mostly horizontal (downrange glide)
+      ang: -15 * Math.PI / 180,   // slight lean toward the deck (body tilted for strake lift)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
