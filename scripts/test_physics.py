@@ -18,13 +18,13 @@ TIERS = {
 VEHICLES = {
     'ocean': {'DRY': 180000, 'FUEL': 70000, 'THR': 4.0e6, 'MDOT': 1200, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 150, 'CDA_LAT': 360,
-              'spawn': {'x': -12500, 'y': 11000, 'vx': 450, 'vy': -480},
-              'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44},
+              'spawn': {'x': -13500, 'y': 11000, 'vx': 450, 'vy': -480},
+              'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44, 'deckX': 1400},
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
-              'spawn': {'x': -14000, 'y': 13000, 'vx': 550, 'vy': -600},
+              'spawn': {'x': -15000, 'y': 13000, 'vx': 550, 'vy': -600},
               'STRAKE_MULT': 1.35,
-              'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34},
+              'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34, 'deckX': 1400},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
               'RHO0': 0, 'HSCALE': 50000, 'CDA_AX': 0, 'CDA_LAT': 0,
               'spawn': {'x': 15000, 'y': 5000, 'vx': -340, 'vy': -12},
@@ -122,17 +122,15 @@ def sim_landing(mode, verbose=False):
             else:
                 ang = 0; thr = 0  # coast (save fuel)
         elif mode in ('tower', 'ocean'):
-            # Downrange droneship landing: DECEL BURN (retrograde) fired HIGH — above the entry
-            # interface — to bleed speed before the heat pulse, then GLIDE, then terminal arrest.
-            dist = -x
-            # heat gate: while still in the hot regime (near/above entry AND fast), hold ENGINE-FIRST
-            # (retrograde, belly~0) and burn to bleed speed — do NOT lean to glide yet or you go
-            # broadside and cook. Only start the strake glide once past the heat pulse (slow enough).
+            # Downrange droneship landing: DECEL BURN (retrograde) fired HIGH, then GLIDE toward the
+            # downrange deck (at deckX), then terminal arrest. dist = signed distance to the deck.
+            dx0 = v.get('deckX', 0)
+            dist = dx0 - x
             hot = (y > ENTRY_Y - 1500) and (sp > 220)
             if hot:
                 ang = math.atan2(-vx, -vy); thr = 1.0                 # DECEL BURN, engine-first through the heat
             elif y < stop_dist * 1.15 and vy < -4:
-                ang = max(-0.12, min(0.12, -vx * 0.01)); thr = 1.0   # terminal vertical arrest
+                ang = max(-0.12, min(0.12, dist * 0.0004 - vx * 0.01)); thr = 1.0   # terminal arrest, drift to deck
             elif dist > 500:
                 ang = 30 * math.pi / 180; thr = 0                     # glide right toward the deck (past the heat)
             elif abs(vx) > 12:
@@ -165,8 +163,8 @@ def sim_landing(mode, verbose=False):
 
     result = {
         'mode': mode, 'vy': round(-vy, 1), 'vx': round(abs(vx), 1),
-        'x': round(x), 'fuel': round(fuel), 't': round(t, 1),
-        'on_deck': abs(x) <= v['padHalf'],
+        'x': round(x), 'off': round(abs(x - v.get('deckX', 0))), 'fuel': round(fuel), 't': round(t, 1),
+        'on_deck': abs(x - v.get('deckX', 0)) <= v['padHalf'],
         'vy_ok': -vy <= v['OK_vy'], 'vx_ok': abs(vx) <= v['OK_vx'],
     }
     success = result['vy_ok']  # vy within tolerance is the primary landability check
