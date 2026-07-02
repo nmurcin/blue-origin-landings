@@ -1808,10 +1808,27 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // Ultra-weak (1.2e-5) so the natural equilibrium is a steep lean, not a vertical drop.
     aacc -= 1.2e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
   }
+  // ROTATE ABOUT THE CENTER OF MASS, not the tracked base point. s.x/s.y is the booster's BASE
+  // (engine end); physically the vehicle pivots about its CoM (~mid-body). Without this, changing
+  // the angle swings the nose while the tail stays planted (visibly wrong). We hold the CoM fixed
+  // across the angle change by re-deriving the base from it. comH = CoM height up the body axis.
+  // (NG boosters only; mars/moon keep base-pivot — their sprites are short/vacuum.)
+  const pivotCoM = (mode === 'ocean' || mode === 'tower');
+  let comX, comY, comH;
+  if (pivotCoM) {
+    comH = 62 * 0.42;   // CoM ~42% up the GS1 body from the base (empty-ish booster, mid-lowish)
+    comX = s.x + Math.sin(s.ang) * comH;
+    comY = s.y + Math.cos(s.ang) * comH;
+  }
   s.angv += aacc * dt;
   s.ang += s.angv * dt;
   if (s.ang > Math.PI) s.ang -= 2 * Math.PI;
   else if (s.ang < -Math.PI) s.ang += 2 * Math.PI;
+  if (pivotCoM) {
+    // re-place the base so the CoM stayed put during the rotation
+    s.x = comX - Math.sin(s.ang) * comH;
+    s.y = comY - Math.cos(s.ang) * comH;
+  }
 
   s.vx += ax * dt;
   s.vy += ay * dt;
