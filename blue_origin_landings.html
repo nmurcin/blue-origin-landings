@@ -631,6 +631,9 @@ const ORB_HEAT_DMG_DIV   = 3.0e7;  // damage-rate divisor (full edge-on at peak 
 // Jacklyn (LPV-1) sea platform — landing deck half-width.
 const DECK_HALF = 44;            // NG 7×2 deck
 const DECK_HALF_94 = 34;         // NG 9×4: smaller effective target — tighter to hit (harder)
+// Deck downrange position (world x). NG boosters land DOWNRANGE, so Jacklyn sits to the RIGHT of
+// x=0 to catch the booster's forward glide/overshoot. Mars (MK1) target stays at x=0.
+function deckX() { return (mode === 'ocean' || mode === 'tower') ? 1400 : 0; }
 // Tower / chopsticks — RETAINED but unused (NG has no chopstick catch). Kept so the menu and
 // renderer references stay valid; the 9×4 lands on Jacklyn like the 7×2.
 const TOWER_X = -26, TOWER_W = 12, TOWER_TOP = 124;   // body west of the slot; catch side faces down-range
@@ -1616,7 +1619,7 @@ function newRun(m) {
     // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(14000 + Math.random() * 1000) * T().bAltMul,  // ~14 km LEFT — matches the reach from the high (22km) opening
+      x: -(15000 + Math.random() * 1000) * T().bAltMul,  // ~15 km LEFT — reaches the downrange deck (deckX +1400)
       y: (13000 + Math.random() * 400) * T().bAltMul,
       vx: (550 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier, hotter Mach-class entry)
       vy: -(600 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
@@ -1639,7 +1642,7 @@ function newRun(m) {
     // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
     // closer version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(12500 + Math.random() * 800) * T().bAltMul,  // ~12.5 km LEFT — matches the reach from the high (22km) opening
+      x: -(13500 + Math.random() * 800) * T().bAltMul,  // ~13.5 km LEFT — reaches the downrange deck (deckX +1400)
       y: (11000 + Math.random() * 400) * T().bAltMul,
       vx: (450 + Math.random() * 40) * T().bSpdMul,     // FAST downrange (Mach-class energy) → long glide
       vy: -(480 + Math.random() * 60) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up
@@ -2194,20 +2197,21 @@ function evalTouchdown() {
   const vDeg = Math.abs(b.ang * 180 / Math.PI);
   // booster speeds shown at the tier's display scale; mars (MK1 lunar) is already real-scale
   const sf = (mode === 'mars') ? 1 : T().dispSpd;
+  const offForm = Math.abs(b.x - deckX());   // horizontal miss distance from the deck center
   const lines = [
     'Vertical speed  ' + (-b.vy * sf).toFixed(1) + ' m/s',
     'Drift           ' + (Math.abs(b.vx) * sf).toFixed(1) + ' m/s',
     'Tilt            ' + vDeg.toFixed(1) + '°',
-    'Offset          ' + Math.abs(b.x).toFixed(1) + ' m',
+    'Offset          ' + offForm.toFixed(1) + ' m',
     'Fuel left       ' + Math.round(b.fuel) + ' kg'
   ];
   const spec = landingSpec(mode), OK = spec.ok, padHalf = spec.padHalf;
-  if (Math.abs(b.x) > padHalf) {
+  if (offForm > padHalf) {
     if (mode === 'mars') {
-      crash(b.x, 2, 'Missed the pad by ' + Math.round(Math.abs(b.x) - padHalf) + ' m — that\'s lunar regolith');
+      crash(b.x, 2, 'Missed the pad by ' + Math.round(offForm - padHalf) + ' m — that\'s lunar regolith');
     } else {
       spawnSplash(b.x, 110); shakeT = 0.4;
-      finish(false, 'SPLASHDOWN', ['Missed Jacklyn by ' + Math.round(Math.abs(b.x) - padHalf) + ' m'], 0);
+      finish(false, 'SPLASHDOWN', ['Missed Jacklyn by ' + Math.round(offForm - padHalf) + ' m'], 0);
     }
     return;
   }
@@ -2217,7 +2221,7 @@ function evalTouchdown() {
                   Math.abs(b.vx) > OK.vx ? 'Too much sideways drift' : 'Tipped over — landed at ' + vDeg.toFixed(0) + '°');
     return;
   }
-  const touchVy = -b.vy, touchX = Math.abs(b.x);
+  const touchVy = -b.vy, touchX = offForm;
   b.vx = 0; b.vy = 0; b.y = 0; b.angv = 0;
   // fuel is the score; precision tops it up
   const base = spec.base;
@@ -2837,7 +2841,7 @@ function updateCam(dt) {
   const viewH = Math.min(viewHCap, Math.max(240, b.y * 1.5 + 140));
   const targetS = H / viewH;
   const t = Math.min(0.5, Math.max(0, b.y / 16000));
-  const padX = 0;
+  const padX = deckX();   // frame toward the actual (downrange) deck as we descend
   const tx = b.x + (padX - b.x) * t;
   const ty = Math.max(b.y * 0.62, viewH * 0.16);
   const k = Math.min(1, dt * 3);
@@ -3176,8 +3180,10 @@ function drawGround() {
       }
     }
     // Jacklyn (LPV-1): slab-sided landing platform vessel. The 9×4 targets a tighter deck.
+    // Centered on the downrange deck position (deckX), not x=0, so it catches the forward glide.
     const deckHalf = mode === 'tower' ? DECK_HALF_94 : DECK_HALF;
-    const x0 = w2sX(-deckHalf), x1 = w2sX(deckHalf);
+    const dcx = deckX();
+    const x0 = w2sX(dcx - deckHalf), x1 = w2sX(dcx + deckHalf);
     const dm = (v) => Math.max(v * cam.s, v * 0.55 * devicePixelRatio);
     const dh = dm(7), inset = dm(5);
     const hullG = ctx.createLinearGradient(0, gy, 0, gy + dh);
@@ -3212,10 +3218,10 @@ function drawGround() {
     ctx.strokeStyle = '#e8b93c';
     ctx.lineWidth = Math.max(1.2 * devicePixelRatio, 0.6 * cam.s);
     ctx.beginPath();
-    ctx.ellipse(w2sX(0), gy + dm(0.65), dm(11), dm(0.55), 0, 0, Math.PI * 2);
+    ctx.ellipse(w2sX(dcx), gy + dm(0.65), dm(11), dm(0.55), 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(w2sX(0), gy - dm(0.2)); ctx.lineTo(w2sX(0), gy + dm(1.4));
+    ctx.moveTo(w2sX(dcx), gy - dm(0.2)); ctx.lineTo(w2sX(dcx), gy + dm(1.4));
     ctx.stroke();
     // corner thruster pods
     ctx.fillStyle = '#1a2026';
@@ -3231,7 +3237,7 @@ function drawGround() {
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.font = (Math.max(9, 2.6 * cam.s / devicePixelRatio) * devicePixelRatio) + 'px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('JACKLYN · LPV-1', w2sX(0), gy + dh + 12 * devicePixelRatio);
+      ctx.fillText('JACKLYN · LPV-1', w2sX(dcx), gy + dh + 12 * devicePixelRatio);
     }
     ctx.restore();
   } else if (mode === 'mars' || (mode === 'moon' && b && b.phase === 'lunardesc')) {
@@ -3655,10 +3661,11 @@ function drawTargetPointer() {
   const a = Math.min(1, (5 - b.t) / 0.8) * Math.min(1, b.t * 2.5);   // fade in, fade out
   if (a <= 0) return;
   const targetY = 0;   // deck / pad / surface — all touchdowns are at ground level now
-  const sx = w2sX(0);
+  const tgx = deckX();
+  const sx = w2sX(tgx);
   if (sx < -px(40) || sx > W + px(40)) return;
   const bob = Math.sin(performance.now() / 260) * px(4);
-  const tipY = w2sY(targetY + curveOff(0)) - px(14) + bob;
+  const tipY = w2sY(targetY + curveOff(tgx)) - px(14) + bob;
   const s = px(9);
   ctx.save();
   ctx.globalAlpha = a;
@@ -4337,6 +4344,26 @@ function flightHint() {
   if (b.heatFrac > 0.85) {
     hint = SHIP_MODE ? '⚠ HEAT — ROLL THE BELLY INTO THE WIND' : '⚠ OVERHEATING — DECEL BURN NOW (' + BURN_K + ') or she burns up!';
     warn = true;
+  }
+  // NG BOOSTER decel-burn guidance (altitude-driven, takes priority so the player knows WHEN to burn).
+  // Fires the moment control hands off, while still high + fast: hold engine-first + BURN to bleed
+  // speed before the heat pulse. Then coast/glide, then the terminal landing burn.
+  else if ((mode === 'ocean' || mode === 'tower') && !b.opening) {
+    const spd = Math.hypot(b.vx, b.vy);
+    if (b.y > ENTRY_Y - 500 && spd > 250) {
+      // still high + fast → THE decel burn window. Warn hard; heat is coming.
+      hint = '⚠ DECEL BURN — point engine-first (' + STEER_K + ') and hold ' + BURN_K + ' to kill speed before reentry heat';
+      warn = true;
+    } else if (b.y > 3500) {
+      hint = 'COAST — ride the strakes toward Jacklyn, glide the ✕ onto the deck';
+    } else {
+      const stop = predictBurnStop();
+      const OK = landingSpec(mode).ok;
+      if (b.thr < 0.1 && stop && stop.y < 220) { hint = '⚠ LANDING BURN — hold ' + BURN_K + ' NOW (3→1 engines)'; warn = true; }
+      else if (b.thr > 0.1) hint = 'Set her on Jacklyn — under ' + OK.vy + ' m/s, tilt < ' + OK.ang + '°';
+      else hint = 'Line up the deck — lean ' + STEER_K + ', burn late off the STOP marker';
+    }
+    return { hint, warn };
   }
   else if (mode === 'mars') {
     // Blue Moon MK1 lunar descent (Apollo-style approach): lander-appropriate hints only.
