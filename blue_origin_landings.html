@@ -612,9 +612,13 @@ function moonStage(stage) {
 // engine bay's limit and burns up. The DECEL BURN — fired HIGH, above the entry interface — is the
 // only way to bleed that speed before the heat pulse. This makes the reentry burn truly mandatory
 // (a no-burn engine-first descent now cooks at ~1.8x tol; a well-timed high decel burn survives at ~0.8x).
-const HEAT_TOL_BELLY = 3.0e7; // rho*v^3 the protected (engine-first) side tolerates
+const HEAT_TOL_BELLY = 1.7e7; // rho*v^3 the protected (engine-first) side tolerates. LOWERED 3.0e7
+                              // → 1.7e7: at the real game descent the natural terminal velocity was
+                              // only reaching ~0.88x the old tol, so a no-burn engine-first descent
+                              // SURVIVED. Now it peaks ~1.6-1.8x → burns up without a decel burn,
+                              // while a proper high decel burn survives with margin (~0.35x).
 const HEAT_TOL_BARE  = 1.4e7; // tolerance with the wrong side forward
-const HEAT_DMG_DIV   = 6.0e5; // damage rate divisor (lowered from 1.2e6 so the decel burn is TRULY
+const HEAT_DMG_DIV   = 3.0e5; // damage rate divisor (lowered from 6.0e5 so the decel burn is TRULY
                               // mandatory: after the flat-plate lift fix removed the old prograde
                               // "thruster" push, a bare no-decel glide peaked ~1.8-2.0x tol but no
                               // longer accumulated enough damage to burn up. Faster damage accrual
@@ -3738,26 +3742,33 @@ function drawReentryGuide() {
   if (!inDecel) return;
 
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
-  // retrograde = engines-first = opposite the velocity vector. That's the target attitude.
-  const retro = Math.atan2(-b.vx, -b.vy);          // world heading the NOSE... no: body points nose-up,
-  // The booster's body axis is (sin(ang),cos(ang)) = nose dir; engine-first means the body axis is
-  // ALONG velocity (engines trailing), i.e. nose points OPPOSITE velocity → desired ang = atan2(vx,vy).
-  const desiredAng = Math.atan2(b.vx, b.vy);
+  // DESIRED ATTITUDE = engine-first = nose pointing OPPOSITE the velocity (retrograde), so the
+  // engine thrust (which acts toward the nose, ax=T·sin(ang)) DECELERATES. Body axis = (sin,cos),
+  // so nose-retrograde means ang = atan2(-vx, -vy). (The earlier atan2(vx,vy) was prograde — it had
+  // the burn ACCELERATING the booster, which is the bug the player reported.)
+  const desiredAng = Math.atan2(-b.vx, -b.vy);
   let dAng = b.ang - desiredAng;
   while (dAng > Math.PI) dAng -= 2 * Math.PI;
   while (dAng < -Math.PI) dAng += 2 * Math.PI;
   const aligned = Math.abs(dAng) < 0.18;           // within ~10° of engine-first
   const burning = b.thr > 0.3;
-  const good = aligned && burning;
-  const col = good ? '#58d68d' : aligned ? '#e8b93c' : '#ff6a4a';
+
+  // COUNTDOWN to max heating: forward-integrate the current state (engine-first, NO burn) and find
+  // how many seconds until heatFrac would hit 1.0 (burn-through). This is the window to get the
+  // decel burn in. If burning enough to hold heat down, it reads "SAFE".
+  let tHeat = predictHeatTimeout();
+
+  // director points toward the desired (retrograde) nose direction, drawn in SCREEN space (y flipped)
+  const dvx = Math.sin(desiredAng), dvy = Math.cos(desiredAng);   // world nose dir
+  const ndx = dvx, ndy = -dvy;                                     // screen (y inverted)
+  const vlen = px(64);
+  const gx = bsx + ndx * vlen, gy2 = bsy + ndy * vlen;
+
+  // color: green when aligned+burning and heat is under control; amber aligned; red = not aligned
+  const safe = burning && aligned;
+  const col = safe ? '#58d68d' : aligned ? '#e8b93c' : '#ff6a4a';
 
   ctx.save();
-  // 1) RETROGRADE DIRECTOR: a chevron out along the velocity vector (the way to lean the nose to be
-  //    engine-first is to point the nose UP-the-velocity; show the target direction as a gate).
-  const vlen = px(64), vux = b.vx / (spd || 1), vuy = b.vy / (spd || 1);
-  // desired nose direction on screen = opposite velocity (screen y is inverted)
-  const ndx = -vux, ndy = vuy;   // screen-space unit toward desired nose (retrograde), y flipped
-  const gx = bsx + ndx * vlen, gy2 = bsy + ndy * vlen;
   ctx.strokeStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
   ctx.setLineDash([px(5), px(5)]);
   ctx.beginPath(); ctx.moveTo(bsx, bsy); ctx.lineTo(gx, gy2); ctx.stroke();
@@ -3765,14 +3776,45 @@ function drawReentryGuide() {
   // gate brackets at the target-attitude tip (chopstick-style guidance)
   const ga = Math.atan2(gy2 - bsy, gx - bsx), br = px(11);
   for (const s of [-1, 1]) {
-    const px1 = gx + Math.cos(ga + s * 1.4) * br, py1 = gy2 + Math.sin(ga + s * 1.4) * br;
-    const px2 = gx + Math.cos(ga + s * 0.5) * br * 1.7, py2 = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
-    ctx.beginPath(); ctx.moveTo(px1, py1); ctx.lineTo(gx, gy2); ctx.lineTo(px2, py2); ctx.stroke();
+    const p1x = gx + Math.cos(ga + s * 1.4) * br, p1y = gy2 + Math.sin(ga + s * 1.4) * br;
+    const p2x = gx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
+    ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(gx, gy2); ctx.lineTo(p2x, p2y); ctx.stroke();
   }
-  // 2) label
-  const msg = good ? 'DECEL BURN — HOLD' : aligned ? 'ALIGNED — HOLD BURN' : 'POINT ENGINES INTO THE WIND';
-  hudText(msg, gx, gy2 - px(16), 10, col, 'center');
+  // label + heat countdown
+  const msg = aligned ? 'ENGINES INTO THE WIND ✓' : 'POINT ENGINES INTO THE WIND';
+  hudText(msg, gx, gy2 - px(26), 10, col, 'center');
+  if (tHeat === Infinity) {
+    hudText('HEAT: SAFE', gx, gy2 - px(14), 10, '#58d68d', 'center');
+  } else {
+    const cd = Math.max(0, tHeat);
+    const cdcol = cd < 3 ? '#ff5040' : cd < 6 ? '#ffb14a' : '#e8b93c';
+    hudText('BURN-THROUGH IN ' + cd.toFixed(1) + 's', gx, gy2 - px(14), 11, cdcol, 'center');
+  }
   ctx.restore();
+}
+// Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
+// (burn-through). Returns Infinity if it never does (already safe / slow enough). Cheap: coarse dt.
+function predictHeatTimeout() {
+  let x = b.x, y = b.y, vx = b.vx, vy = b.vy, tt = 0;
+  const dt = 0.15;
+  for (let i = 0; i < 200; i++) {
+    const r = rho(y), sp = Math.hypot(vx, vy) || 1;
+    // engine-first assumed → belly≈0 → protected tolerance
+    const hRamp = Math.min(1, Math.max(0, (ENTRY_Y + 2500 - y) / 2200));
+    const q3 = r * sp * sp * sp * hRamp;
+    if (q3 >= HEAT_TOL_BELLY) return tt;                 // would burn through about now
+    // simple ballistic + axial drag (no lift, no thrust): conservative estimate of the heat pulse.
+    // Drag opposes the velocity vector; gravity pulls down. (No engine burn — this is the "if you
+    // do nothing" forecast, which is exactly what the countdown warns against.)
+    const axDragF = Math.min(1, Math.max(0.4, 1 - (y - ENTRY_Y) / 12000));
+    const m = DRY_MASS + b.fuel;
+    const Fd = 0.5 * r * CDA_AX * axDragF * sp * sp;
+    vx += (-Fd * vx / sp) / m * dt;
+    vy += (-G - Fd * vy / sp / m) * dt;
+    x += vx * dt; y += vy * dt; tt += dt;
+    if (y <= 0) break;
+  }
+  return Infinity;
 }
 
 // Persistent LANDING-SITE marker through the whole belly phase: a green ✛ target on the
