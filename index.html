@@ -3653,12 +3653,27 @@ function drawBurnStop() {
   };
 }
 
-// "aim HERE": a bobbing marker over the landing target for the first few
-// seconds of every run, so new pilots know where they're going
+// "aim HERE": a bobbing marker over the landing target. For NG boosters it stays up through the
+// opening + DECEL-BURN phase and only fades once you enter COAST/CTRL (so you always know where the
+// deck is while setting up the reentry). Other modes keep the original brief intro fade.
 function drawTargetPointer() {
-  if (scene !== 'flying' || !b || b.t > 5) return;
+  if (scene !== 'flying' || !b) return;
   if (mode === 'moon') return;   // launch has no landing target
-  const a = Math.min(1, (5 - b.t) / 0.8) * Math.min(1, b.t * 2.5);   // fade in, fade out
+  let a;
+  if (mode === 'ocean' || mode === 'tower') {
+    // hot/decel phase = still high AND fast (matches the hint's decel-burn window). Hold the marker
+    // at full alpha through the opening + decel burn; once coast/ctrl begins (no longer hot), fade it.
+    const spd = Math.hypot(b.vx, b.vy);
+    const inDecelPhase = b.opening || (b.y > ENTRY_Y - 500 && spd > 250);
+    if (inDecelPhase) { a = Math.min(1, b.t * 2.5); }               // fade IN, then hold
+    else {
+      if (b.coastT === undefined) b.coastT = b.t;                    // stamp the moment coast/ctrl begins
+      a = Math.max(0, 1 - (b.t - b.coastT) / 1.2);                   // fade OUT over ~1.2s into coast
+    }
+  } else {
+    if (b.t > 5) return;
+    a = Math.min(1, (5 - b.t) / 0.8) * Math.min(1, b.t * 2.5);       // original brief intro fade
+  }
   if (a <= 0) return;
   const targetY = 0;   // deck / pad / surface — all touchdowns are at ground level now
   const tgx = deckX();
