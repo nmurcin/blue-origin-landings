@@ -3758,9 +3758,11 @@ function drawReentryGuide() {
   // decel burn in. If burning enough to hold heat down, it reads "SAFE".
   let tHeat = predictHeatTimeout();
 
-  // director points toward the desired (retrograde) nose direction, drawn in SCREEN space (y flipped)
-  const dvx = Math.sin(desiredAng), dvy = Math.cos(desiredAng);   // world nose dir
-  const ndx = dvx, ndy = -dvy;                                     // screen (y inverted)
+  // director points DOWNSTREAM (along the velocity vector / direction of travel), not back up the
+  // retrograde nose direction — reads more intuitively as "the way you're headed". (The alignment
+  // check still uses the retrograde attitude; this is purely the on-screen arrow direction.)
+  const dvx = Math.sin(desiredAng), dvy = Math.cos(desiredAng);   // world retrograde nose dir
+  const ndx = -dvx, ndy = dvy;                                     // FLIPPED 180° → downstream, screen (y inverted)
   const vlen = px(64);
   const gx = bsx + ndx * vlen, gy2 = bsy + ndy * vlen;
 
