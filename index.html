@@ -570,13 +570,6 @@ function nearMoon() {
   const mp = moonPosAt(moonAngle);
   return Math.hypot(b.ox - mp.x, b.oy - mp.y) < MOON_SOI * 1.8;
 }
-// Within 50 000 km of the Moon — close enough to unlock the tight MOON+ view that
-// frames the Moon AND the ship together.
-function nearMoonClose() {
-  if (!nearMoon()) return false;
-  const mp = moonPosAt(moonAngle);
-  return Math.hypot(b.ox - mp.x, b.oy - mp.y) < MOON_CLOSE_KM;
-}
 
 // Vehicle param sets for the MK2 moon mission's ground-frame episodes. (Orbital burns
 // use their own constants in stepOrbit, NOT these globals.) All figures are PUBLIC-DATA-
@@ -1687,7 +1680,9 @@ function newRun(m) {
   } else {
     b.opening = false;
   }
-  result = null; particles = []; armClose = 0; armY = ARM_Y; shakeT = 0; timeScale = 1;
+  // reset time-warp too (warpIdx is a global; without this a warped MK1 run left it stale, so pressing
+  // R started the fresh run fast-forwarded). timeScale covers ocean/tower; warpIdx covers mars/moon.
+  result = null; particles = []; armClose = 0; armY = ARM_Y; shakeT = 0; timeScale = 1; warpIdx = 0;
   cam.x = b.x; cam.y = b.y * 0.62; cam.s = H / 30000;
   scene = 'flying';
 }
@@ -2174,6 +2169,10 @@ function updateParticles(dt) {
 function finish(ok, title, lines, score, breakdown) {
   result = { ok, title, lines, score: Math.max(0, Math.round(score)), breakdown: breakdown || '' };
   scene = 'done';
+  // Capture the PRIOR best BEFORE we raise it below, so drawDone() can tell a genuine new best from a
+  // repeat landing (previously it compared against the just-updated best → always showed "NEW BEST").
+  result.prevBest = mode === 'ocean' ? save.bestOcean : mode === 'tower' ? save.bestTower
+                  : mode === 'moon' ? (save.bestMoon || 0) : save.bestMars;
   if (ok) {
     if (mode === 'ocean') {
       save.oceanWins++;
@@ -2269,7 +2268,7 @@ function updateShip(dt) {
     // SEPARATED: GS2 burns to orbit — climb PROGRADE (up-and-right). Uses its own sep-relative
     // timer (set to 0 at separation). Keeps a rightward+upward acceleration so it clearly pulls
     // AWAY and UP from the descending booster (fixing the "GS2 appears below GS1" bug).
-    const st = ngMode ? ship.t : ship.t;
+    const st = ship.t;   // (was a no-op ternary: both branches were ship.t)
     const a = st < 7 ? 26 : 6;
     // steer the exhaust so thrust points up-and-right (prograde to orbit): aim ~35° right of vertical
     const targetAng = 35 * Math.PI / 180;
@@ -2517,16 +2516,6 @@ function updateOrbital(dt) {
     if (moonD < MOON_SOI) { b.phase = 'flyby'; }
     else if (altKm < ATMO_KM) { crash(0, 2, 'Fell back into Earth\'s atmosphere — burn to swing back toward the Moon'); return; }
   }
-}
-// Perigee of the current (near-Earth, ~2-body) trajectory — how deep this entry
-// dips. Above the corridor = skips off; far below = comes in too steep.
-function entryPerigeeKm() {
-  const r = Math.hypot(b.ox, b.oy), v2 = b.ovx * b.ovx + b.ovy * b.ovy;
-  const h = b.ox * b.ovy - b.oy * b.ovx;                   // specific angular momentum
-  const E = v2 / 2 - MU_E / r;
-  const a = -MU_E / (2 * E);
-  const e = Math.sqrt(Math.max(0, 1 + 2 * E * h * h / (MU_E * MU_E)));
-  return a * (1 - e) - R_E_KM;
 }
 // Max BELLY-survivable speed at an altitude (km/s): hypersonic q = ρ·v³ = belly tolerance →
 // v = (tol/ρ)^⅓. Go faster than this here and you exceed the heat shield even belly-flat.
@@ -3506,12 +3495,15 @@ function drawTrajectory() {
   const pts = predictTrajectory();
   if (pts.length < 2) return;
   ctx.save();
-  // judge predicted impact (pad/deck at x=0 in every flat-frame level now)
+  // judge predicted impact against the ACTUAL deck position: NG boosters land downrange at deckX()
+  // (900), not x=0 — so measure the miss from deckX() to match evalTouchdown + the LAND HERE marker.
+  // (Was Math.abs(last.x), which turned the ✕ green ~900 m short of the real deck.)
   const last = pts[pts.length - 1];
+  const dcx = deckX();
   let good = false;
-  if (mode === 'ocean') good = Math.abs(last.x) < DECK_HALF;
-  else if (mode === 'tower') good = Math.abs(last.x) < DECK_HALF_94;
-  else good = Math.abs(last.x) < 30;   // mars (MK1) + moon (MK2) lunar pad
+  if (mode === 'ocean') good = Math.abs(last.x - dcx) < DECK_HALF;
+  else if (mode === 'tower') good = Math.abs(last.x - dcx) < DECK_HALF_94;
+  else good = Math.abs(last.x - dcx) < 30;   // mars (MK1) + moon (MK2) lunar pad (deckX()=0)
   ctx.setLineDash([6 * devicePixelRatio, 7 * devicePixelRatio]);
   // dark casing first, bright line on top — readable over the pale sky
   for (const pass of [0, 1]) {
@@ -4589,26 +4581,6 @@ function setView(z) {
   mapR = 0;                                       // recompute map scale instantly
   if (z === ZOOM_MOON || z === ZOOM_MOONCLOSE) moonViewS = 0;
   if (z === 0) snapGroundCam();                   // STANDARD: jump the chase cam onto the ship
-}
-// AUTO view: pick the best view for where the ship is. Earth side uses the two EXAG
-// views (EARTH+ near, ORBIT mid) so that transition is a smooth mapR zoom; the Moon
-// side uses the close-ups (MOON / MOON+, a smooth moonViewS zoom). The one hard cut is
-// crossing the Moon's SOI (map ↔ close-up are different camera frames) — a natural
-// hand-off point.
-function autoSelectView() {
-  if (!b || !inOrbitalPhase()) return;
-  const altKm = Math.hypot(b.ox, b.oy) - R_E_KM;
-  const mp = moonPosAt(moonAngle);
-  const moonD = Math.hypot(b.ox - mp.x, b.oy - mp.y);
-  let z;
-  if (moonD < MOON_CLOSE_KM) z = ZOOM_MOONCLOSE;
-  else if (moonD < MOON_SOI * 1.8) z = ZOOM_MOON;
-  else if (altKm < 25000) z = ZOOM_EARTHCLOSE;
-  else z = 1;                                     // ORBIT (exag) — mid-cruise; smooth with EARTH+
-  if (z !== orbitZoom) {
-    orbitZoom = z; mapR = 0;
-    if (z === ZOOM_MOON || z === ZOOM_MOONCLOSE) moonViewS = 0;
-  }
 }
 
 // Key-controls legend, TOP-RIGHT corner (desktop only — mobile uses touch controls).
@@ -6324,7 +6296,7 @@ function drawDone() {
     if (result.breakdown) { hudText(result.breakdown, pcx, y, 11, '#8fa0ae', 'center'); y += px(20); }
     const best = mode === 'ocean' ? save.bestOcean : mode === 'tower' ? save.bestTower
                : mode === 'moon' ? (save.bestMoon || 0) : save.bestMars;
-    hudText(result.score >= best ? '★ NEW BEST' : 'best ' + best, pcx, y, 13, '#8fa0ae', 'center'); y += px(20);
+    hudText(result.score >= (result.prevBest || 0) ? '★ NEW BEST' : 'best ' + best, pcx, y, 13, '#8fa0ae', 'center'); y += px(20);
     if (mode === 'ocean' && save.oceanWins === UNLOCK_WINS) {
       hudText('9×4 UNLOCKED — ready for the harder variant? press M', pcx, y + px(8), 14, '#e8b93c', 'center'); y += px(22);
     } else if (mode === 'ocean' && save.oceanWins > UNLOCK_WINS) {
