@@ -635,9 +635,12 @@ const ORB_HEAT_DMG_DIV   = 3.0e7;  // damage-rate divisor (full edge-on at peak 
 // Jacklyn (LPV-1) sea platform — landing deck half-width.
 const DECK_HALF = 44;            // NG 7×2 deck
 const DECK_HALF_94 = 34;         // NG 9×4: smaller effective target — tighter to hit (harder)
-// Deck downrange position (world x). NG boosters land DOWNRANGE, so Jacklyn sits to the RIGHT of
-// x=0 to catch the booster's forward glide/overshoot. Mars (MK1) target stays at x=0.
-function deckX() { return (mode === 'ocean' || mode === 'tower') ? 1400 : 0; }
+// Deck downrange position (world x). NG boosters land DOWNRANGE: Jacklyn sits where a well-flown
+// forward glide NATURALLY arrives, so the whole approach flows ONE direction (separate right →
+// brake engine-first → glide forward → land) and the booster never has to overshoot then reverse
+// back to the deck. Sim-tuned to ~900 so the aim-for-deck descent lands ~100 m short (a forward
+// glide closes it), monotonic approach from the left. Mars (MK1) target stays at x=0.
+function deckX() { return (mode === 'ocean' || mode === 'tower') ? 900 : 0; }
 // Tower / chopsticks — RETAINED but unused (NG has no chopstick catch). Kept so the menu and
 // renderer references stay valid; the 9×4 lands on Jacklyn like the 7×2.
 const TOWER_X = -26, TOWER_W = 12, TOWER_TOP = 124;   // body west of the slot; catch side faces down-range
