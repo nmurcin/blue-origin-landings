@@ -3727,6 +3727,54 @@ function drawMK1DistanceIndicator() {
   ctx.restore();
 }
 
+// GUIDED REENTRY — during the decel-burn phase (NG boosters, high + fast) show the pilot HOW to set
+// up: a retrograde attitude director anchored to the booster (point the engines into the wind), a
+// "corridor" gate that turns green when you're aligned + burning, and a compass note. Fades out once
+// past the heat pulse (coast/ctrl), same window as the LAND HERE marker + the decel-burn hint.
+function drawReentryGuide() {
+  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying') return;
+  const spd = Math.hypot(b.vx, b.vy);
+  const inDecel = !b.opening && b.y > ENTRY_Y - 500 && spd > 250;
+  if (!inDecel) return;
+
+  const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
+  // retrograde = engines-first = opposite the velocity vector. That's the target attitude.
+  const retro = Math.atan2(-b.vx, -b.vy);          // world heading the NOSE... no: body points nose-up,
+  // The booster's body axis is (sin(ang),cos(ang)) = nose dir; engine-first means the body axis is
+  // ALONG velocity (engines trailing), i.e. nose points OPPOSITE velocity → desired ang = atan2(vx,vy).
+  const desiredAng = Math.atan2(b.vx, b.vy);
+  let dAng = b.ang - desiredAng;
+  while (dAng > Math.PI) dAng -= 2 * Math.PI;
+  while (dAng < -Math.PI) dAng += 2 * Math.PI;
+  const aligned = Math.abs(dAng) < 0.18;           // within ~10° of engine-first
+  const burning = b.thr > 0.3;
+  const good = aligned && burning;
+  const col = good ? '#58d68d' : aligned ? '#e8b93c' : '#ff6a4a';
+
+  ctx.save();
+  // 1) RETROGRADE DIRECTOR: a chevron out along the velocity vector (the way to lean the nose to be
+  //    engine-first is to point the nose UP-the-velocity; show the target direction as a gate).
+  const vlen = px(64), vux = b.vx / (spd || 1), vuy = b.vy / (spd || 1);
+  // desired nose direction on screen = opposite velocity (screen y is inverted)
+  const ndx = -vux, ndy = vuy;   // screen-space unit toward desired nose (retrograde), y flipped
+  const gx = bsx + ndx * vlen, gy2 = bsy + ndy * vlen;
+  ctx.strokeStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
+  ctx.setLineDash([px(5), px(5)]);
+  ctx.beginPath(); ctx.moveTo(bsx, bsy); ctx.lineTo(gx, gy2); ctx.stroke();
+  ctx.setLineDash([]);
+  // gate brackets at the target-attitude tip (chopstick-style guidance)
+  const ga = Math.atan2(gy2 - bsy, gx - bsx), br = px(11);
+  for (const s of [-1, 1]) {
+    const px1 = gx + Math.cos(ga + s * 1.4) * br, py1 = gy2 + Math.sin(ga + s * 1.4) * br;
+    const px2 = gx + Math.cos(ga + s * 0.5) * br * 1.7, py2 = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
+    ctx.beginPath(); ctx.moveTo(px1, py1); ctx.lineTo(gx, gy2); ctx.lineTo(px2, py2); ctx.stroke();
+  }
+  // 2) label
+  const msg = good ? 'DECEL BURN — HOLD' : aligned ? 'ALIGNED — HOLD BURN' : 'POINT ENGINES INTO THE WIND';
+  hudText(msg, gx, gy2 - px(16), 10, col, 'center');
+  ctx.restore();
+}
+
 // Persistent LANDING-SITE marker through the whole belly phase: a green ✛ target on the
 // pad so you always know which way / how far it is (it's far below during the high
 // belly-flop, so the marker clamps to the screen edge with the distance). Same green as
@@ -6387,6 +6435,7 @@ function drawChaseScene() {
     drawBooster();
     drawTargetPointer();
     drawMK1DistanceIndicator();
+    drawReentryGuide();           // NG decel-burn phase: retrograde attitude director + corridor gate
     drawLandingSiteMarker();      // belly phase: persistent green ✛ on the pad (edge-clamped + distance)
     drawAscentGuide();            // launch gravity-turn guide (no-op in orbit)
     drawOrbitDirector();          // orbital BURN/PROGRADE director (no-op on launch)
