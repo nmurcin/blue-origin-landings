@@ -3850,24 +3850,14 @@ function drawBooster() {
   const NG_H = 62, MK1_H = 18;
   // Landing legs function (called after the traced vehicle to overlay deployment animation).
   function drawLandingLegs(vH) {
-    // MK1: legs always deployed. NG: deploy only when low AND slow (terminal descent).
-    const alwaysOut = mode === 'mars';
+    // MK1 (mars): NO drawn legs — the traced MK1 model already has its legs attached. Only the NG
+    // boosters get the deploy-out-of-the-body animation below.
+    if (mode === 'mars') return;
+    // NG: deploy only when low AND slow (terminal descent).
     const nearVertical = Math.abs(b.vx) < 50;
-    const ext = alwaysOut ? 1.0 : ((b.y < 380 && nearVertical) ? Math.min(1, Math.max(0, (380 - b.y) / 200)) : 0);
+    const ext = (b.y < 380 && nearVertical) ? Math.min(1, Math.max(0, (380 - b.y) / 200)) : 0;
     if (ext < 0.01) return;
     const e = 1 - Math.pow(1 - ext, 2);   // pneumatic ease-out
-
-    if (mode === 'mars') {
-      // MK1 lander: simple thin legs (always deployed, gray struts, small pads)
-      ctx.strokeStyle = '#8a939c'; ctx.lineWidth = 0.8; ctx.lineCap = 'round';
-      for (const s of [-1, 1]) {
-        const hx = s * vH * 0.15, hy = -vH * 0.25;
-        const fx = s * vH * 0.5, fy = 0;
-        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(fx, fy); ctx.stroke();
-        ctx.fillStyle = '#8a939c'; ctx.fillRect(fx - 1.0, fy - 0.25, 2.0, 0.5);
-      }
-      return;
-    }
 
     // NG LANDING LEGS — SPIDER / PISTON STYLE (from reference images). Thick dark curved tubular
     // struts that EXTEND DOWNWARD out of recesses in the aft body (NOT a hinge-swing). Like spider
