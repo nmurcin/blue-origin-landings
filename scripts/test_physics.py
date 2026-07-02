@@ -18,11 +18,11 @@ TIERS = {
 VEHICLES = {
     'ocean': {'DRY': 180000, 'FUEL': 70000, 'THR': 4.0e6, 'MDOT': 1200, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 150, 'CDA_LAT': 360,
-              'spawn': {'x': -13500, 'y': 11000, 'vx': 450, 'vy': -480},
+              'spawn': {'x': -13500, 'y': 16500, 'vx': 450, 'vy': -480},
               'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44, 'deckX': 1400},
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
-              'spawn': {'x': -15000, 'y': 13000, 'vx': 550, 'vy': -600},
+              'spawn': {'x': -15000, 'y': 17500, 'vx': 550, 'vy': -600},
               'STRAKE_MULT': 1.35,
               'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34, 'deckX': 1400},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
@@ -41,10 +41,10 @@ LIFT_CLAMP_G = 1.2   # lift ceiling as a multiple of weight m*G (HTML const LIFT
 RCS0 = {'ocean': 600, 'tower': 700, 'mars': 2000}
 RCS_BURN = 55
 # heat model (matches the game): q3 = rho*v^3*hRamp; burn up if damage >= 100
-HEAT_TOL_BELLY = 3.0e7   # engine-first tolerance (lowered so SPEED matters, not just attitude)
+HEAT_TOL_BELLY = 1.7e7   # engine-first tolerance (lowered 3.0e7→1.7e7 so no-burn reliably burns up)
 HEAT_TOL_BARE = 1.4e7
-HEAT_DMG_DIV = 6.0e5  # matches HTML: lowered from 1.2e6 so the decel burn stays mandatory after
-                      # the flat-plate lift fix removed the old prograde push (see HTML comment).
+HEAT_DMG_DIV = 3.0e5  # matches HTML: lowered 6.0e5→3.0e5 (with tol 1.7e7) so a no-burn engine-first
+                      # descent reliably burns up (~1.6-1.8x) while a good decel burn survives (~0.35x).
 ENTRY_Y = 8500
 
 
