@@ -457,10 +457,11 @@ const GLIDE_ENTRY_SPD = 260;  // m/s: only enter the tilt once slowed below this
 // pilot loves — an unboosted or lightly-boosted glide there feels weak. So we BOOST the lift hard in the
 // post-burn glide to restore that "amazing" crossrange authority at low speed. Only active when inGlide →
 // the fast pre-burn crossrange, the decel burn, and the terminal landing are ALL unaffected.
-const GLIDE_LIFT_BOOST = 3.6;  // ×lift during the post-burn glide (2.4→3.6): sized so post-burn lift ≈
-                               //   the ~1.7-1.8× weight that the fast pre-burn phase produces (which felt great).
-const GLIDE_CLAMP_G    = 5.0;  // lift ceiling (×weight) during the glide only (4.0→5.0 so the bigger boost
-                               //   isn't capped); base LIFT_CLAMP_G applies everywhere else.
+const GLIDE_LIFT_BOOST = 1.8;  // ×lift during the post-burn glide. REDUCED 3.6→1.8: pilot found 3.6 (and
+                               //   even ~2×) overpowering/floaty. With the deck moved closer (16k) less reach
+                               //   is needed, so a gentler boost gives precise, controllable crossrange.
+const GLIDE_CLAMP_G    = 3.0;  // lift ceiling (×weight) during the glide only (5.0→3.0 to match the smaller
+                               //   boost); base LIFT_CLAMP_G applies everywhere else.
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
 // acceleration, the resulting spin PERSISTS, and a light bleed (no air up here, so
 // this is reaction-wheel trim) lets a runaway rate be nulled in a few seconds.
@@ -1534,6 +1535,7 @@ function playChime() {
 let scene = 'menu';   // menu | flying | done | paused
 let mode = 'ocean';   // ocean | tower
 let b = null;         // booster state
+let reentryDirAng = null;   // slewed reentry-director attitude (rad); null = re-seed to optimal on next show
 let ship = null;      // the Starship riding on top until stage separation
 let discard = null;   // jettisoned Super Heavy tumbling away after staging (moon)
 let env = null;       // per-run environment (wind)
@@ -1620,6 +1622,7 @@ let clouds = [];
 
 function newRun(m) {
   mode = m;
+  reentryDirAng = null;   // re-seed the reentry director to optimal on this run's first frame
   // anti-cheat: mint a one-time run token now; submitScore spends it on a win. The server
   // rejects scores with no/used/instant token, so a forged "submit 5000" can't board.
   runToken = null;
@@ -3819,10 +3822,16 @@ function drawMK1DistanceIndicator() {
   ctx.restore();
 }
 
+// Reentry director tuning: the director isn't a static retrograde arrow — it CONTINUOUSLY recomputes
+// the optimal attitude (retrograde, biased toward putting the booster back on the optimal track to the
+// deck) and SLOWLY slews toward it, so it swings gently as a live guide the pilot chases.
+const REENTRY_CORR_K   = 5e-5;   // rad of attitude bias per metre of projected-landing miss
+const REENTRY_CORR_MAX = 0.22;   // clamp the bias to ~13° — a fine course correction, never a hard turn
+const REENTRY_SLEW     = 0.05;   // per-frame low-pass toward the optimal → slow, minor swings (no snap)
 // GUIDED REENTRY — during the decel-burn phase (NG boosters, high + fast) show the pilot HOW to set
-// up: a retrograde attitude director anchored to the booster (point the engines into the wind), a
-// "corridor" gate that turns green when you're aligned + burning, and a compass note. Fades out once
-// past the heat pulse (coast/ctrl), same window as the LAND HERE marker + the decel-burn hint.
+// up: a LIVE attitude director anchored to the booster (point the engines into the wind, nudged to
+// hold the optimal track), a "corridor" gate that turns green when you're aligned + burning, and the
+// burn timing. Fades out once past the heat pulse (coast/ctrl), same window as the decel-burn hint.
 function drawReentryGuide() {
   if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying') return;
   const spd = Math.hypot(b.vx, b.vy);
@@ -3830,15 +3839,38 @@ function drawReentryGuide() {
   if (!inDecel) return;
 
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
-  // DESIRED ATTITUDE = engine-first = nose pointing OPPOSITE the velocity (retrograde), so the
-  // engine thrust (which acts toward the nose, ax=T·sin(ang)) DECELERATES. Body axis = (sin,cos),
-  // so nose-retrograde means ang = atan2(-vx, -vy). (The earlier atan2(vx,vy) was prograde — it had
-  // the burn ACCELERATING the booster, which is the bug the player reported.)
-  const desiredAng = Math.atan2(-b.vx, -b.vy);
+  // OPTIMAL ATTITUDE, recomputed LIVE every frame. Base = engine-first / retrograde: nose OPPOSITE
+  // the velocity, so thrust (ax=T·sin(ang)) DECELERATES. Then BIAS it slightly toward the attitude
+  // that puts the booster back on the optimal track to the deck: if the projected touchdown is landing
+  // SHORT of the deck, lean the nose a touch downrange so the residual burn nudges the path toward the
+  // deck; if LONG, lean the other way. The bias is small (clamped ~13°) — the director stays mostly
+  // retrograde (heat survival first) but continuously trims toward the ideal track, so it slowly SWINGS
+  // as a live guide instead of sitting on a fixed retrograde arrow.
+  const retroAng = Math.atan2(-b.vx, -b.vy);
+  let corr = 0;
+  try {
+    const pts = predictTrajectory();
+    if (pts && pts.length) {
+      const miss = deckX() - pts[pts.length - 1].x;    // + = projected landing SHORT / left of deck
+      // sign: leaning the nose toward +x (downrange) points thrust to push the path downrange.
+      corr = Math.max(-REENTRY_CORR_MAX, Math.min(REENTRY_CORR_MAX, miss * REENTRY_CORR_K));
+    }
+  } catch (e) { corr = 0; }
+  const optimalAng = retroAng + corr;                  // the ideal attitude, live
+  // SLOW SLEW: low-pass the displayed director toward the optimal so it drifts gently (minor swings),
+  // never snapping. Re-seed straight to optimal when the guide first appears (reentryDirAng null).
+  if (reentryDirAng === null) reentryDirAng = optimalAng;
+  let sErr = optimalAng - reentryDirAng;
+  while (sErr > Math.PI) sErr -= 2 * Math.PI;
+  while (sErr < -Math.PI) sErr += 2 * Math.PI;
+  reentryDirAng += sErr * REENTRY_SLEW;                // gentle chase toward the moving optimal
+  while (reentryDirAng > Math.PI) reentryDirAng -= 2 * Math.PI;
+  while (reentryDirAng < -Math.PI) reentryDirAng += 2 * Math.PI;
+  const desiredAng = reentryDirAng;                    // the arrow + gate track the SLEWED optimal
   let dAng = b.ang - desiredAng;
   while (dAng > Math.PI) dAng -= 2 * Math.PI;
   while (dAng < -Math.PI) dAng += 2 * Math.PI;
-  const aligned = Math.abs(dAng) < 0.18;           // within ~10° of engine-first
+  const aligned = Math.abs(dAng) < 0.18;           // within ~10° of the (live) director attitude
   const burning = b.thr > 0.3;
 
   // BURN TIMING (the two numbers the pilot needs):
@@ -3912,53 +3944,117 @@ function drawReentryGuide() {
   hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
   ctx.restore();
 }
-// On-vehicle GLIDE director — the belly-flop-phase counterpart to drawReentryGuide. Active only in
-// the heavy-tilt glide band (below the decel window, above the landing floor). Shows an arrow toward
-// the deck and an attitude cue telling the player to lean into the glide and steer the ✕ onto Jacklyn,
-// then to straighten up as she nears the floor. Mirrors the reentry director's visual language.
+// On-vehicle GLIDE STEER-DIRECTOR — the glide-phase counterpart to drawReentryGuide, redesigned so it
+// is FULLY ACTIONABLE with the deck AND the ✕ predictor OFF-SCREEN (they almost always are up here).
+// It references NOTHING off-screen: everything is driven by the single scalar
+//   miss = deckX() - predictTrajectory().last.x   (+ = landing SHORT / left of deck, - = LONG)
+// and rendered ON the booster in the reentry-director's grammar:
+//   • a horizontal STEER ARROW whose DIRECTION = which way to steer and LENGTH = how far off,
+//   • a GATE that pinches to a tight green V as the miss → 0 (locked on track),
+//   • a CHASE TAPE (short↔long rail) whose marker sits on the SAME side you must push, so steering
+//     correctly visibly walks it to the center notch,
+//   • two text lines: STEER LEFT/RIGHT + the miss distance.
+// CHASE convention (verified against stepPhysics: ArrowRight → +b.ang → lift/thrust downrange → lands
+// further right): a SHORT miss (miss>0) is cured by steering RIGHT, and the marker sits RIGHT too.
+const GLIDE_TAPE_FULL = 3000;   // m: miss magnitude that saturates the arrow/tape (signed-sqrt compress)
+const GLIDE_DEADBAND  = 250;    // m: within this, "ON TRACK" — terminal landing burn absorbs the rest
 function drawGlideGuide() {
   if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
   const spd = Math.hypot(b.vx, b.vy);
-  // gate to the same band the physics auto-lean uses (see GLIDE_* consts), plus a small display
-  // margin so the cue appears just as the belly-flop begins and fades as she re-verticals.
+  // same band the physics auto-lean uses (GLIDE_* consts) + a small display margin.
   const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
   if (!inGlide) return;
 
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
-  const straightenUp = b.y < (GLIDE_FLOOR_Y + 200);   // near the floor → cue the transition to vertical
-  // "Leaned" = the body has reached its glide attitude. The physics trims the BODY toward GLIDE_LEAN
-  // rad from vertical (|b.ang| is the lean from vertical), so measure that directly — within ~12°
-  // (0.21 rad) of the target flips the cue green like the reentry "✓". (Was comparing an angle-of-
-  // attack to the now-removed GLIDE_AOA constant, which threw a ReferenceError and crashed the render
-  // loop the moment the glide director activated — i.e. right at the reentry→glide transition.)
-  const leaned = Math.abs(b.ang) > (GLIDE_LEAN - 0.21);
-  const col = straightenUp ? '#e8b93c' : (leaned ? '#58d68d' : '#7cc4ff');
-
-  // arrow points DOWNRANGE toward the deck (the way the glide should carry her): screen +x = deck side
-  // for ocean/tower (deck is downrange, to the right). Draw a short dashed vector + gate brackets.
-  const dcx = deckX();
-  const dir = (dcx >= b.x) ? 1 : -1;          // toward the deck along downrange axis
-  const vlen = px(60);
-  const gx = bsx + dir * vlen, gy2 = bsy - px(10);
+  const ax = bsx, ay = bsy - px(10);                 // anchor (lifted off the booster)
+  const straightenUp = b.y < (GLIDE_FLOOR_Y + 200);  // near the floor → cue the transition to vertical
+  const leaned = Math.abs(b.ang) > (GLIDE_LEAN - 0.21);   // has she settled into the glide lean yet
+  const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+  const STEER = MOBILE ? 'steer' : '';
 
   ctx.save();
-  ctx.strokeStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
-  ctx.setLineDash([px(5), px(5)]);
-  ctx.beginPath(); ctx.moveTo(bsx, bsy - px(10)); ctx.lineTo(gx, gy2); ctx.stroke();
-  ctx.setLineDash([]);
-  const ga = Math.atan2(gy2 - (bsy - px(10)), gx - bsx), br = px(11);
-  for (const s of [-1, 1]) {
-    const p1x = gx + Math.cos(ga + s * 1.4) * br, p1y = gy2 + Math.sin(ga + s * 1.4) * br;
-    const p2x = gx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
-    ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(gx, gy2); ctx.lineTo(p2x, p2y); ctx.stroke();
+
+  // STRAIGHTEN override — highest priority, hides the steer instrument.
+  if (straightenUp) {
+    hudText('STRAIGHTEN UP FOR LANDING', ax, ay - px(24), 10, '#e8b93c', 'center');
+    hudText('ease vertical, ready the landing burn', ax, ay - px(12), 9, '#e8b93c', 'center');
+    ctx.restore();
+    return;
   }
-  const STEER = MOBILE ? 'steer' : '← →';
-  const msg = straightenUp ? 'STRAIGHTEN UP FOR LANDING'
-            : leaned ? 'BELLY-FLOP GLIDE ✓ — steer to the deck'
-            : 'LEAN INTO THE GLIDE (' + STEER + ')';
-  hudText(msg, gx, gy2 - px(24), 10, col, 'center');
-  const sub = straightenUp ? 'ease vertical, ready the landing burn' : 'fly the ✕ onto Jacklyn';
-  hudText(sub, gx, gy2 - px(12), 9, col, 'center');
+
+  // The one scalar that drives everything. Guard against a not-yet-grounded forecast.
+  let miss = null;
+  try {
+    const traj = predictTrajectory();
+    const last = traj && traj.length ? traj[traj.length - 1] : null;
+    if (last && traj.length >= 2 && last.y <= 50) miss = deckX() - last.x;   // + = SHORT, - = LONG
+  } catch (e) { miss = null; }
+
+  // ENTERING / SETTLING, or no usable forecast → just tell them to lean in (dim tape only).
+  if (miss === null || !leaned) {
+    hudText('GLIDE — WALK THE LANDING IN', ax, ay - px(24), 10, '#7cc4ff', 'center');
+    hudText('lean to steer' + (STEER ? '  (' + STEER + ')' : '  (← →)'), ax, ay - px(12), 9, '#7cc4ff', 'center');
+    // faint rail so the instrument's location is established before it activates
+    const HW = px(60);
+    ctx.strokeStyle = 'rgba(140,160,175,0.35)'; ctx.lineWidth = px(3); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(ax - HW, ay + px(20)); ctx.lineTo(ax + HW, ay + px(20)); ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  const amiss = Math.abs(miss);
+  const dir = Math.sign(miss) || 1;                 // +1 = short = steer RIGHT; -1 = long = steer LEFT
+  const frac = Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));   // 50m→.13, 500m→.41, 3km→1
+  const onTrack = amiss <= GLIDE_DEADBAND;
+  // color: green locked; else amber→orange→red as the miss grows (reentry-director palette)
+  const col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
+
+  // (1) STEER VECTOR — horizontal, points the way to steer; length grows with the miss. Hidden when locked.
+  const vlen = px(24) + frac * px(56);
+  const gx = ax + dir * vlen, gy = ay;
+  if (!onTrack) {
+    ctx.setLineDash([px(5), px(5)]);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(gx, gy); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // (2) GATE brackets at the tip — pinch to a tight V as the error shrinks (spread wide when far off).
+  const spread = onTrack ? 0.28 : 0.30 + frac * 1.1;
+  const ga = Math.atan2(gy - ay, gx - ax) || 0, br = px(11);
+  const tipx = onTrack ? ax : gx, tipy = gy;
+  for (const s of [-1, 1]) {
+    const p1x = tipx + Math.cos(ga + s * spread) * br, p1y = tipy + Math.sin(ga + s * spread) * br;
+    const p2x = tipx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = tipy + Math.sin(ga + s * 0.5) * br * 1.7;
+    ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(tipx, tipy); ctx.lineTo(p2x, p2y); ctx.stroke();
+  }
+  // (3) CHASE TAPE — short↔long rail; marker on the SAME side you push, walks to center as you fix it.
+  const HW = px(60), ty = ay + px(20);
+  ctx.strokeStyle = 'rgba(140,160,175,0.5)'; ctx.lineWidth = px(3);
+  ctx.beginPath(); ctx.moveTo(ax - HW, ty); ctx.lineTo(ax + HW, ty); ctx.stroke();
+  // center notch (deck-on-tape) + tick posts
+  ctx.strokeStyle = onTrack ? '#58d68d' : 'rgba(180,200,215,0.7)'; ctx.lineWidth = px(2);
+  for (const t of [-px(8), px(8)]) { ctx.beginPath(); ctx.moveTo(ax + t, ty - px(4)); ctx.lineTo(ax + t, ty + px(4)); ctx.stroke(); }
+  hudText('SHORT', ax - HW - px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'right');
+  hudText('LONG', ax + HW + px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'left');
+  // marker
+  const mx = ax + dir * frac * HW;
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.moveTo(mx, ty - px(5)); ctx.lineTo(mx - px(4), ty + px(2)); ctx.lineTo(mx + px(4), ty + px(2)); ctx.closePath(); ctx.fill();
+
+  // (4) TEXT — action on top, magnitude below.
+  let top, sub;
+  if (onTrack) {
+    top = 'ON TRACK ✓  hold it'; sub = 'walking onto Jacklyn';
+  } else if (dir > 0) {
+    top = 'STEER RIGHT' + (STEER ? '' : ' →') + '  (add downrange)';
+    sub = 'SHORT ' + fmt(amiss) + ' — push toward the deck';
+  } else {
+    top = 'STEER LEFT' + (STEER ? '' : ' ←') + '  (bleed downrange)';
+    sub = 'LONG ' + fmt(amiss) + ' — ease off the deck';
+  }
+  hudText(top, ax, ay - px(24), 10, col, 'center');
+  hudText(sub, ax, ay - px(12), 9, col, 'center');
   ctx.restore();
 }
 // Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
@@ -4661,10 +4757,9 @@ function flightHint() {
       }
       warn = true;
     } else if (b.y > 3500) {
-      // HEAVY-TILT GLIDE phase — the flagship belly-flop (physics auto-leans in this band). Tell the
-      // player the tilt is intentional and that leaning steers the ✕ onto the deck (matches the
-      // on-vehicle glide director).
-      hint = '↘ BELLY-FLOP GLIDE — let her lean, steer ' + STEER_K + ' to fly the ✕ onto Jacklyn';
+      // GLIDE phase — physics auto-leans; the on-vehicle STEER-DIRECTOR shows short/long + which way
+      // to steer. Keep this line consistent with it (no off-screen ✕/deck reference).
+      hint = 'GLIDE — steer ' + STEER_K + ' to walk the landing onto the deck (watch the SHORT/LONG tape)';
     } else if (b.y > 2000) {
       // Transition across GLIDE_FLOOR_Y (2600): physics is re-verticaling — cue the player to stand
       // her up for the terminal landing burn.
