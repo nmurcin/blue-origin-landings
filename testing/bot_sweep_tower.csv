@@ -1,0 +1,7 @@
+label,mode,burnStartAlt,bleedVx,glideLean,aNet,result,land_x,vx,vy,ang,fuel,dmg,reason,survived,vy_ok,vx_ok,vx_never_neg,min_vx,soft_touchdown
+EDECEL_180,tower,7000,30,-2,9.5,LOST,15711,0.18,-2.96,-0.3,8714,0,Missed Jacklyn by 7327 m,True,True,True,True,-0.5,True
+EDECEL_240,tower,7000,40,-2,9.5,LOST,16489,-0.16,-2.93,0.1,15607,0,Missed Jacklyn by 8105 m,True,True,True,True,-0.6,True
+EDECEL_300,tower,7000,40,-2,9.5,LOST,17365,0.63,-2.98,-1.6,18425,0,Missed Jacklyn by 8981 m,True,True,True,True,-0.2,True
+EDECEL_360,tower,6000,60,-2,9.5,LOST,19621,0.06,-3.02,-0.4,24478,0,Missed Jacklyn by 11237 m,True,True,True,True,-0.4,True
+EDECEL_430,tower,5000,110,-2,9.5,LOST,16572,117.42,-316.21,-22.2,80090,100,Burned up on reentry — keep the belly to the wind,False,False,False,True,117.8,False
+EDECEL_520,tower,4200,170,-2,9.5,LOST,17483,223.15,-367,-27.7,86684,100,Burned up on reentry — keep the belly to the wind,False,False,False,True,223.5,False
