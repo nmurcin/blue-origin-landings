@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# ============================================================================
+# Pre-commit secret guard for blue-origin-landings (PUBLIC GitHub repo).
+# Blocks any commit that stages a credential-shaped string or a browser
+# profile file. Enable once with:   git config core.hooksPath .githooks
+# Bypass in a genuine false-positive with:   git commit --no-verify
+# ============================================================================
+set -u
+fail=0
+
+# --- 1. Block browser-profile / obviously-sensitive PATHS from being staged ---
+blocked_paths=$(git diff --cached --name-only |
+  grep -Ei '(_chromeprofile|/Default/(Cookies|Login Data|Web Data)|\.env($|\.)|\.pem$|\.p12$|\.pfx$|id_rsa|id_ed25519|settings\.local\.json|credential|\.secrets$|\.token$)' || true)
+if [ -n "$blocked_paths" ]; then
+  echo "BLOCKED: these staged paths look sensitive and must not be committed to a public repo:"
+  echo "$blocked_paths" | sed 's/^/   /'
+  fail=1
+fi
+
+# --- 2. Scan staged CONTENT for real credential shapes ---------------------
+# Patterns target real tokens, not empty stubs or comments. Added lines only.
+# NOTE: capture the full diff into a variable FIRST, then filter it. Piping
+# `git diff ... | grep` directly inside $(...) intermittently loses git's
+# output to a SIGPIPE/buffering race in some Git-for-Windows bash contexts
+# (observed: the pipe returns empty even though the diff has content). Staging
+# the diff in a var and filtering with here-strings is race-free.
+rawdiff=$(git diff --cached --unified=0 -- ':!.githooks/pre-commit')
+# Both greps MUST use -E: in default BRE, `\+` is the one-or-more quantifier
+# (not a literal plus), so `grep -v '^\+\+\+'` without -E strips every line and
+# silently disables all content checks. With -E, `\+` is a literal `+`.
+added=$(printf '%s\n' "$rawdiff" | grep -E '^\+' | grep -Ev '^\+\+\+')
+
+# High-signal credential prefixes (very low false-positive rate)
+if echo "$added" | grep -Eq '(glpat-[A-Za-z0-9_-]{15,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xoxb-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'; then
+  echo "BLOCKED: a staged line matches a known secret token prefix (GitLab PAT / GitHub token / AWS key / Google key / Slack / private key)."
+  fail=1
+fi
+
+# Blue Origin credential names that must never appear with a value
+if echo "$added" | grep -Eq 'BDMS_TOKEN[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9._-]{10,}'; then
+  echo "BLOCKED: a staged line assigns a non-empty BDMS_TOKEN (Blue Origin credential)."
+  fail=1
+fi
+
+# Generic key/secret/token/password assigned a NON-EMPTY value (skip empty stubs '' or "")
+if echo "$added" | grep -Eiq '(api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret|auth[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}["'"'"']'; then
+  echo "WARNING: a staged line assigns a non-empty value to a key/secret/token/password variable."
+  echo "         Review the lines below. If this is real, do NOT commit. If it's game data or a"
+  echo "         false positive, re-run with:  git commit --no-verify"
+  echo "$added" | grep -Ein '(api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret|auth[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}["'"'"']' | sed 's/^/   /' | head -20
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "Commit REJECTED by .githooks/pre-commit (secret guard)."
+  echo "This repo is public. If you are certain the flagged content is safe,"
+  echo "bypass with:  git commit --no-verify"
+  exit 1
+fi
+exit 0
