@@ -628,12 +628,24 @@ const ORB_HEAT_DMG_DIV   = 3.0e7;  // damage-rate divisor (full edge-on at peak 
 // Jacklyn (LPV-1) sea platform — landing deck half-width.
 const DECK_HALF = 44;            // NG 7×2 deck
 const DECK_HALF_94 = 34;         // NG 9×4: smaller effective target — tighter to hit (harder)
-// Deck downrange position (world x). NG boosters land DOWNRANGE: Jacklyn sits where a well-flown
-// forward glide NATURALLY arrives, so the whole approach flows ONE direction (separate right →
-// brake engine-first → glide forward → land) and the booster never has to overshoot then reverse
-// back to the deck. Sim-tuned to ~900 so the aim-for-deck descent lands ~100 m short (a forward
-// glide closes it), monotonic approach from the left. Mars (MK1) target stays at x=0.
-function deckX() { return (mode === 'ocean' || mode === 'tower') ? 900 : 0; }
+// Deck downrange position (world x). NG boosters land DOWNRANGE: Jacklyn sits AHEAD of the booster
+// (to the right, downrange) for the ENTIRE descent — the player always flies TOWARD it and only
+// draws even at touchdown ("lead the target"). The whole approach flows ONE direction (separate →
+// brake engine-first → glide forward → land); the booster never overshoots then reverses (a reversal
+// is un-physical: the real GS1 carries its separation momentum downrange onto the platform, no
+// boostback). It's CORRECT that the deck looks far away at spawn — real Jacklyn is stationed far
+// downrange, nowhere near under NG at MECO/sep.
+// Positions are REAL-GAME-DERIVED (testing/bot_envelope_findings.md): a bot flying the actual game
+// mapped the survivable reachable-landing band (ocean ~13.4–15.1 km, tower ~15.7–19.6 km). The deck
+// sits at the short edge of that band so a competent descent reliably reaches it with the deck ahead
+// the whole way and vx never reversing. (An earlier offline sim predicted ~7050/8350 — those proved
+// UNREACHABLE in the real game, which carries the booster ~2.5× further; the bot telemetry is ground
+// truth.) Mars/moon lunar pad stays at x=0.
+function deckX() {
+  if (mode === 'ocean') return 14000;  // NG 7×2 — real-game survivable band ~13.4–15.1 km, deck ahead whole descent
+  if (mode === 'tower') return 17000;  // NG 9×4 — real-game survivable band ~15.7–19.6 km (heavier + faster entry)
+  return 0;                            // lunar pad
+}
 // Tower / chopsticks — RETAINED but unused (NG has no chopstick catch). Kept so the menu and
 // renderer references stay valid; the 9×4 lands on Jacklyn like the 7×2.
 const TOWER_X = -26, TOWER_W = 12, TOWER_TOP = 124;   // body west of the slot; catch side faces down-range
@@ -1614,12 +1626,13 @@ function newRun(m) {
   } else if (m === 'tower') {
     // NEW GLENN 9×4 — DOWNRANGE LANDING (like real NG on a droneship). The booster does NOT boost
     // back; it continues its forward momentum, coast + strake-glide toward Jacklyn which is AHEAD
-    // (to the right, downrange). The player rides the strakes' cross-range lift to extend the glide
-    // and reach the deck. Spawn LEFT of the deck (negative x), moving RIGHT (positive vx) toward x=0.
-    // Much more strake-dependent than the 7×2 (which boosts back). This is the flagship NG mechanic.
+    // (to the right, downrange at deckX ~17000). The player rides the strakes' cross-range lift to
+    // extend the glide and reach the deck. Spawn LEFT of the deck (x=0 is the launch mount), moving
+    // RIGHT (positive vx) — momentum carries it downrange ONTO the deck, never reversing. More
+    // strake-dependent than the 7×2 (heavier, faster entry). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(15000 + Math.random() * 1000) * T().bAltMul,  // ~15 km LEFT — reaches the downrange deck (deckX +1400)
+      x: -(15000 + Math.random() * 1000) * T().bAltMul,  // ~15 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~17000)
       y: (13000 + Math.random() * 400) * T().bAltMul,
       vx: (550 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier, hotter Mach-class entry)
       vy: -(600 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
@@ -1639,10 +1652,11 @@ function newRun(m) {
     // NEW GLENN 7×2 — DOWNRANGE DRONESHIP LANDING. Launched from land to the left, separated
     // moving up-and-right. Continues RIGHTWARD (no boostback — this is a droneship mission, not
     // RTLS). Bleeds speed with a reentry burn while still moving rightward, uses strakes to glide,
-    // then a terminal landing burn onto Jacklyn (at x=0, to the right). The 7×2 is the easier/
-    // closer version; the 9×4 is the same concept but faster/further/tighter.
+    // then a terminal landing burn onto Jacklyn (downrange at deckX ~14000; x=0 is the launch mount).
+    // Momentum carries it ONTO the deck without ever reversing. The 7×2 is the easier/closer
+    // version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(13500 + Math.random() * 800) * T().bAltMul,  // ~13.5 km LEFT — reaches the downrange deck (deckX +1400)
+      x: -(13500 + Math.random() * 800) * T().bAltMul,  // ~13.5 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~14000)
       y: (11000 + Math.random() * 400) * T().bAltMul,
       vx: (450 + Math.random() * 40) * T().bSpdMul,     // FAST downrange (Mach-class energy) → long glide
       vy: -(480 + Math.random() * 60) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up
@@ -1862,11 +1876,15 @@ function predictTrajectory() {
   // carries your live rotation: spin hard and the predicted path swings with you
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: b.angv, fuel: b.fuel };
   const thrRaw = b.thr > 0.05 ? b.thr : 0;
-  // Boostback (booster burning up at altitude): show the CUT-NOW ballistic
-  // arc at full length — the ✕ is "where do I land if I cut here", which is
-  // exactly the question the boostback answers. Holding thr in the model
-  // instead made the line a stub that slowly crept out of the craft.
-  const thr = (thrRaw > 0 && !SHIP_MODE && b.y > ENTRY_Y) ? 0 : thrRaw;
+  // The ✕ answers "where do I actually go if I HOLD what I'm doing right now?" — so it must include
+  // the live engine thrust AND the body tilt. Previously, for NG boosters above ENTRY_Y, thrust was
+  // forced to 0 in the forecast (a "cut-now ballistic arc"); but that made the predicted path IGNORE
+  // the player's tilt during the decel burn — you could lean the body hard and the ✕ wouldn't move,
+  // which is exactly the disconnect the pilot reported. Now we KEEP the live thrust so tilting
+  // visibly swings the ✕ (the burn pushes along the nose = T·sin(ang) laterally). When the player
+  // is merely coasting (thr≈0) the forecast is naturally ballistic already, so the useful
+  // "where do I fall if I cut" read is preserved without special-casing it.
+  const thr = thrRaw;
   const heldFin = SHIP_MODE ? 0 : ((scene === 'flying' || scene === 'paused') && b.fin) || 0;
   const pts = [];
   // The line answers: "where do I land if I HOLD what I'm doing right now?"
@@ -1884,7 +1902,12 @@ function predictTrajectory() {
     stepPhysics(s, 0.3, thr, 0, heldFin);
     pts.push({ x: s.x, y: s.y });
     if (s.y <= 0) break;
-    if (thr > 0 && s.vy > 0) break;  // burning: stop at apex of arrest
+    // Stop at the apex of arrest ONLY in the terminal LANDING regime (low): there, "where would I
+    // stop if I hold this burn" is the useful read. During the HIGH decel burn the booster is still
+    // climbing (vy>0) right after handoff — truncating there would make the ✕ a stub and hide the
+    // real downrange touchdown point. Above the entry interface we always project to the ground so
+    // the ✕ shows where you'll actually land AND swings as you tilt (thrust redirects with the body).
+    if (thr > 0 && s.vy > 0 && s.y < ENTRY_Y) break;
   }
   return pts;
 }
@@ -2831,8 +2854,9 @@ function updateCam(dt) {
     }
     return;
   }
-  // Ensure both the booster AND the deck (x=0, y=0) are always framed. Scale the cap with the
-  // tier so the higher spawns in Moderate/Full-Sim don't put the deck off-screen.
+  // Ensure both the booster AND the deck (at deckX(), now DOWNRANGE — 14000 for 7×2, 17000 for 9×4;
+  // x=0 is the launch-mount origin, not the deck) are always framed. Scale the cap with the tier so
+  // the higher spawns in Moderate/Full-Sim don't put the deck off-screen.
   const viewHCap = T().bAltMul > 1 ? 150000 : 30000;
   const viewH = Math.min(viewHCap, Math.max(240, b.y * 1.5 + 140));
   const targetS = H / viewH;
@@ -3496,8 +3520,8 @@ function drawTrajectory() {
   if (pts.length < 2) return;
   ctx.save();
   // judge predicted impact against the ACTUAL deck position: NG boosters land downrange at deckX()
-  // (900), not x=0 — so measure the miss from deckX() to match evalTouchdown + the LAND HERE marker.
-  // (Was Math.abs(last.x), which turned the ✕ green ~900 m short of the real deck.)
+  // (14000 for 7×2, 17000 for 9×4), not x=0 — so measure the miss from deckX() to match evalTouchdown
+  // + the LAND HERE marker. (Was Math.abs(last.x), which turned the ✕ green short of the real deck.)
   const last = pts[pts.length - 1];
   const dcx = deckX();
   let good = false;
@@ -3748,10 +3772,22 @@ function drawReentryGuide() {
   const aligned = Math.abs(dAng) < 0.18;           // within ~10° of engine-first
   const burning = b.thr > 0.3;
 
-  // COUNTDOWN to max heating: forward-integrate the current state (engine-first, NO burn) and find
-  // how many seconds until heatFrac would hit 1.0 (burn-through). This is the window to get the
-  // decel burn in. If burning enough to hold heat down, it reads "SAFE".
-  let tHeat = predictHeatTimeout();
+  // BURN TIMING (the two numbers the pilot needs):
+  //  • burnDur  = seconds of full decel burn still needed to bleed to DECEL_SAFE_SPD (the "HOLD BURN
+  //               X.Xs LEFT" duration, shown while burning; ticks to 0 as speed comes off).
+  //  • startIn  = seconds until you SHOULD start the decel burn (shown before burning). Anchored to
+  //               the do-nothing burn-through forecast minus the burn you'll need, with a safety pad
+  //               so "BURN NOW" appears with margin — NOT at the last possible instant. Clamped so it
+  //               reads sensibly even high up where the heat pulse is far off.
+  const burnDur = predictBurnDuration();
+  const tHeat   = predictHeatTimeout();               // do-nothing seconds to burn-through (∞ if never)
+  const BURN_PAD = 4;                                 // start-early safety margin (s)
+  let startIn = Infinity;
+  if (tHeat !== Infinity) {
+    const need = (burnDur === Infinity ? 9 : burnDur); // typical decel ≈ 9s if the predictor bails
+    startIn = Math.max(0, tHeat - need - BURN_PAD);
+  }
+  const decelComplete = burnDur !== Infinity && burnDur <= 0.15;   // already slow enough
 
   // director points DOWNSTREAM (along the velocity vector / direction of travel), not back up the
   // retrograde nose direction — reads more intuitively as "the way you're headed". (The alignment
@@ -3777,24 +3813,47 @@ function drawReentryGuide() {
     const p2x = gx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
     ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(gx, gy2); ctx.lineTo(p2x, p2y); ctx.stroke();
   }
-  // label + heat countdown
+  // label: attitude cue on top, burn-timing readout below.
   const msg = aligned ? 'ENGINES INTO THE WIND ✓' : 'POINT ENGINES INTO THE WIND';
   hudText(msg, gx, gy2 - px(26), 10, col, 'center');
-  if (tHeat === Infinity) {
-    hudText('HEAT: SAFE', gx, gy2 - px(14), 10, '#58d68d', 'center');
+  // Burn-timing readout — the two things the pilot asked for:
+  //   (a) BEFORE the burn: a countdown "DECEL BURN IN X.Xs" to the recommended start.
+  //   (b) DURING the burn: "HOLD BURN — X.Xs" remaining until speed is bled off.
+  //   then "DECEL DONE ✓" once slow enough. Colours ramp green→amber→red as the cue gets urgent.
+  let bt, btcol;
+  if (decelComplete) {
+    bt = 'DECEL DONE ✓'; btcol = '#58d68d';
+  } else if (burning) {
+    // Infinity = the burn integrator didn't reach SAFE_SPD in its horizon (still very fast / hit the
+    // deck). Show an honest "keep burning" cue, NOT "0.0s" — that would falsely read as nearly-done.
+    if (burnDur === Infinity) {
+      bt = 'HOLD BURN — keep bleeding speed'; btcol = '#e8b93c';
+    } else {
+      bt = 'HOLD BURN — ' + burnDur.toFixed(1) + 's';
+      btcol = burnDur > 5 ? '#e8b93c' : burnDur > 2 ? '#ffb14a' : '#58d68d';   // nearly done → green
+    }
+  } else if (startIn <= 0.05) {
+    bt = '⚠ DECEL BURN NOW'; btcol = '#ff5040';
+  } else if (startIn !== Infinity) {
+    bt = 'DECEL BURN IN ' + startIn.toFixed(1) + 's';
+    btcol = startIn < 3 ? '#ff5040' : startIn < 8 ? '#ffb14a' : '#e8b93c';
   } else {
-    const cd = Math.max(0, tHeat);
-    const cdcol = cd < 3 ? '#ff5040' : cd < 6 ? '#ffb14a' : '#e8b93c';
-    hudText('BURN-THROUGH IN ' + cd.toFixed(1) + 's', gx, gy2 - px(14), 11, cdcol, 'center');
+    bt = 'STAND BY TO BURN'; btcol = '#e8b93c';
   }
+  hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
   ctx.restore();
 }
 // Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
 // (burn-through). Returns Infinity if it never does (already safe / slow enough). Cheap: coarse dt.
+// HORIZON = 700 × 0.15s ≈ 105s: the decel burn happens HIGH (~23 km) where the heat pulse is still
+// tens of seconds away, so the old 30s horizon always returned Infinity ("SAFE") and told the pilot
+// nothing. The longer look-ahead sees the real ~77s do-nothing burn-through (sim-verified), so the
+// countdown is honest. Cost is still trivial (a few hundred coarse ballistic steps, once per frame).
 function predictHeatTimeout() {
+  if (!b) return Infinity;   // requires the live booster; guard so an unguarded caller can't crash
   let x = b.x, y = b.y, vx = b.vx, vy = b.vy, tt = 0;
   const dt = 0.15;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 700; i++) {
     const r = rho(y), sp = Math.hypot(vx, vy) || 1;
     // engine-first assumed → belly≈0 → protected tolerance
     const hRamp = Math.min(1, Math.max(0, (ENTRY_Y + 2500 - y) / 2200));
@@ -3810,6 +3869,36 @@ function predictHeatTimeout() {
     vy += (-G - Fd * vy / sp / m) * dt;
     x += vx * dt; y += vy * dt; tt += dt;
     if (y <= 0) break;
+  }
+  return Infinity;
+}
+// Forward-integrate a FULL engine-first decel burn from the current state and return the seconds of
+// burn needed to bleed speed down to DECEL_SAFE_SPD (the coast threshold). This is the "HOLD BURN
+// X.Xs LEFT" duration the pilot sees while burning. Same cheap ballistic+axial-drag model as
+// predictHeatTimeout, plus engine thrust pointed retrograde (engine-first) and fuel burn-down.
+// (Lift is ~perpendicular to velocity, so it barely affects the speed-bleed time → omitted for
+// cheapness.) Sim-verified: ~8-9s regardless of when you start, stable enough to display live.
+const DECEL_SAFE_SPD = 250;   // m/s — below this, heating is no longer a threat; the decel is "done"
+function predictBurnDuration() {
+  if (!b) return Infinity;   // requires the live booster; flightHint() calls this without a b-guard
+  let y = b.y, vx = b.vx, vy = b.vy, fuel = b.fuel, tt = 0, thr = b.thr;
+  const dt = 0.1;
+  for (let i = 0; i < 400; i++) {
+    const sp = Math.hypot(vx, vy) || 1;
+    if (sp <= DECEL_SAFE_SPD) return tt;                 // bled enough — decel complete
+    thr += (1 - thr) * Math.min(1, dt * 8);              // model engine spool-up (same as update())
+    const ang = Math.atan2(-vx, -vy);                    // engine-first (retrograde)
+    const m = DRY_MASS + fuel;
+    let ax = THRUST * thr * Math.sin(ang) / m;
+    let ay = -G + THRUST * thr * Math.cos(ang) / m;
+    const r = rho(y);
+    const axDragF = Math.min(1, Math.max(0.4, 1 - (y - ENTRY_Y) / 12000));
+    const Fd = 0.5 * r * CDA_AX * axDragF * sp * sp;
+    ax += -Fd * vx / sp / m;
+    ay += -Fd * vy / sp / m;
+    if (fuel > 0) fuel = Math.max(0, fuel - MDOT * thr * dt);
+    vx += ax * dt; vy += ay * dt; y += vy * dt; tt += dt;
+    if (y <= 0) return Infinity;                         // hit the deck before slowing (shouldn't happen high up)
   }
   return Infinity;
 }
@@ -4443,8 +4532,15 @@ function flightHint() {
   else if ((mode === 'ocean' || mode === 'tower') && !b.opening) {
     const spd = Math.hypot(b.vx, b.vy);
     if (b.y > ENTRY_Y - 500 && spd > 250) {
-      // still high + fast → THE decel burn window. Warn hard; heat is coming.
-      hint = '⚠ DECEL BURN — point engine-first (' + STEER_K + ') and hold ' + BURN_K + ' to kill speed before reentry heat';
+      // still high + fast → THE decel burn window. Mirror the on-vehicle director's timing numbers
+      // (countdown before the burn, duration-remaining while burning) so both readouts agree.
+      if (b.thr > 0.3) {
+        const left = predictBurnDuration();
+        hint = 'HOLD ' + BURN_K + ' — DECEL BURN ' + (left === Infinity ? '' : left.toFixed(1) + 's left ')
+             + '(engine-first, ' + STEER_K + ')';
+      } else {
+        hint = '⚠ DECEL BURN — point engine-first (' + STEER_K + ') and hold ' + BURN_K + ' to kill speed before reentry heat';
+      }
       warn = true;
     } else if (b.y > 3500) {
       hint = 'COAST — ride the strakes toward Jacklyn, glide the ✕ onto the deck';

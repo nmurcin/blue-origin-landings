@@ -19,12 +19,12 @@ VEHICLES = {
     'ocean': {'DRY': 180000, 'FUEL': 70000, 'THR': 4.0e6, 'MDOT': 1200, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 150, 'CDA_LAT': 360,
               'spawn': {'x': -13500, 'y': 16500, 'vx': 450, 'vy': -480},
-              'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44, 'deckX': 900},
+              'OK_vy': 8.5, 'OK_vx': 7.0, 'padHalf': 44, 'deckX': 6250},
     'tower': {'DRY': 210000, 'FUEL': 90000, 'THR': 5.0e6, 'MDOT': 1500, 'G': 9.81,
               'RHO0': 1.225, 'HSCALE': 8500, 'CDA_AX': 165, 'CDA_LAT': 380,
               'spawn': {'x': -15000, 'y': 17500, 'vx': 550, 'vy': -600},
               'STRAKE_MULT': 1.35,
-              'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34, 'deckX': 900},
+              'OK_vy': 6.0, 'OK_vx': 4.0, 'padHalf': 34, 'deckX': 8250},
     'mars':  {'DRY': 7500, 'FUEL': 3000, 'THR': 6.6e4, 'MDOT': 14.63, 'G': 1.62,
               'RHO0': 0, 'HSCALE': 50000, 'CDA_AX': 0, 'CDA_LAT': 0,
               'spawn': {'x': 15000, 'y': 5000, 'vx': -340, 'vy': -12},
@@ -52,25 +52,162 @@ def rho(y, RHO0, HSCALE):
     return RHO0 * math.exp(-max(0, y) / HSCALE)
 
 
+# === LOCKED OPENING SEQUENCE (must match blue_origin_landings.html newRun + opening override,
+# ocean/tower branch, ~lines 1666-1692). The booster opens HIGH under power, CLIMBING: full
+# throttle along the body axis (22deg prograde lean) to MECO, GS2 separates at OPEN_SEP with a
+# recoil impulse, and control hands off at OPEN_CTRL. This carries the booster up to a ~24 km apex
+# still moving downrange fast, so it arcs over and glides FAR downrange to the deck. ===
+OPEN_MECO, OPEN_SEP, OPEN_CTRL = 2.2, 3.0, 4.6
+OPEN_ANG = 22 * math.pi / 180   # shallow prograde lean during ascent
+OPEN_VY = 180.0                 # ascending at open (positive = up)
+# rotational-dynamics constants (match deck_geometry_both.py / the HTML stepPhysics pivot model)
+NG_H = 62.0
+COM_H = NG_H * 0.42
+GLIDE_LEAN = 20 * math.pi / 180   # deck_geometry_both.py glide lean toward the deck
+
+
+def _ng_landing(mode, verbose=False):
+    """Faithful full-sequence sim for an NG booster (ocean/tower): locked climbing OPENING, then a
+    competent decel -> glide-toward-deck -> terminal-arrest autopilot. Mirrors deck_geometry_both.py
+    run()+step() exactly (rotational dynamics via COM pivot, dt=1/120, thrust easing). Returns the
+    same details dict shape as the generic sim_landing so callers/tests are unchanged."""
+    v = VEHICLES[mode]
+    DRY, FUEL, THR, MDOT, G = v['DRY'], v['FUEL'], v['THR'], v['MDOT'], v['G']
+    RHO0, HSCALE, CDA_AX, CDA_LAT = v['RHO0'], v['HSCALE'], v['CDA_AX'], v['CDA_LAT']
+    deckX = v.get('deckX', 0)
+    sp0 = v['spawn']
+    # FAITHFUL OPENING seed: high, ascending, shallow prograde lean, vx = spawn_vx*0.9.
+    x, y = float(sp0['x']), ENTRY_Y + 14000.0
+    vx, vy = abs(sp0['vx']) * 0.9, OPEN_VY
+    ang, angv, fuel = OPEN_ANG, 0.0, float(FUEL)
+    openT, thr, sepDone, t, dt = 0.0, 0.0, False, 0.0, 1.0 / 120.0
+    dmg = 0.0; maxheat = 0.0
+    vx_min = vx   # minimum horizontal velocity over the whole flight (no-reversal check)
+
+    while y > 0 and t < 400:
+        m = DRY + fuel
+        # --- guidance: scripted opening, then autopilot ---
+        if openT < OPEN_CTRL:
+            thrCmd = 1.0 if openT < OPEN_MECO else 0.0
+            if not sepDone and openT >= OPEN_SEP:
+                sepDone = True
+                vx -= math.sin(ang); vy -= math.cos(ang)   # GS2 separation recoil impulse
+            openT += dt
+            # ang held at the opening lean (body-axis thrust); rotational dynamics apply below.
+        else:
+            sp = math.hypot(vx, vy) or 1e-9
+            eff = THR / m - G
+            stop_dist = vy * vy / (2 * max(0.01, eff)) if eff > 0 else 1e9
+            hot = (y > ENTRY_Y - 1500) and (sp > 250)
+            dist = deckX - x
+            if hot:
+                ang_cmd = math.atan2(-vx, -vy); thrCmd = 1.0                 # DECEL BURN engine-first through heat
+            elif y < stop_dist * 1.15 and vy < -4:
+                ang_cmd = max(-0.12, min(0.12, dist * 0.0004 - vx * 0.01)); thrCmd = 1.0  # terminal arrest -> deck
+            elif dist > 500:
+                ang_cmd = GLIDE_LEAN; thrCmd = 0.0                            # glide right toward the deck
+            elif abs(vx) > 12:
+                ang_cmd = math.atan2(-vx, 0) * 0.3; thrCmd = 0.5             # kill residual drift near deck
+            else:
+                ang_cmd = 0.0; thrCmd = 0.0
+            ang += (ang_cmd - ang) * min(1.0, dt * 6); angv = 0.0            # autopilot commands ang directly
+        thr += (thrCmd - thr) * min(1.0, dt * 8)                            # throttle easing (matches HTML)
+
+        # --- dynamics (mirror deck_geometry_both.py step()) ---
+        ax, ay = 0.0, -G
+        if fuel <= 0:
+            thr = 0.0
+        if thr > 0:
+            T = THR * thr
+            ax += T * math.sin(ang) / m
+            ay += T * math.cos(ang) / m
+            fuel = max(0.0, fuel - MDOT * thr * dt)
+        r = rho(y, RHO0, HSCALE)
+        axx, axy = math.sin(ang), math.cos(ang)
+        nxx, nxy = axy, -axx
+        vax = vx * axx + vy * axy
+        vno = vx * nxx + vy * nxy
+        sp = math.hypot(vx, vy)
+        atmoT = min(1.0, max(0.0, (ENTRY_Y + 2500 - y) / 2200.0))
+        axDragF = min(1.0, max(0.4, 1 - (y - ENTRY_Y) / 12000.0))
+        Fax = -0.5 * r * CDA_AX * axDragF * abs(vax) * vax
+        Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
+        ax += (Fax * axx + Fno * nxx) / m
+        ay += (Fax * axy + Fno * nxy) / m
+        if r > 0 and sp > 1:
+            sinB = max(-1.0, min(1.0, vno / sp))
+            cosB = math.sqrt(max(0.0, 1 - sinB * sinB))
+            CL = sinB * cosB
+            clk = CL_K * v.get('STRAKE_MULT', 1.0)
+            Flift = clk * r * sp * sp * CL * atmoT
+            cap = LIFT_CLAMP_G * m * G
+            Flift = max(-cap, min(cap, Flift))
+            ax += Flift * (-vy / sp) / m + abs(Flift) * GLIDE_K * (vx / sp) / m
+            ay += Flift * (vx / sp) / m + abs(Flift) * GLIDE_K * (vy / sp) / m
+        # rotational dynamics: aero-restoring torque + pivot about the center of mass
+        aacc = -angv * (0.18 + r * sp * 0.0024 * atmoT)
+        aacc -= 1.2e-5 * r * sp * vno * atmoT * (1.0 if vy < 0 else 0.4)
+        comX = x + math.sin(ang) * COM_H; comY = y + math.cos(ang) * COM_H
+        angv += aacc * dt; ang += angv * dt
+        x = comX - math.sin(ang) * COM_H; y = comY - math.cos(ang) * COM_H
+        vx += ax * dt; vy += ay * dt; x += vx * dt; y += vy * dt; t += dt
+        if vx < vx_min:
+            vx_min = vx
+
+        # reentry heat (engine-first protected; broadside burns)
+        hRamp = min(1.0, max(0.0, (ENTRY_Y + 2500 - y) / 2200.0))
+        q3 = r * sp ** 3 * hRamp
+        belly = abs(vno) / sp if sp > 1 else 1.0
+        safe = 1 - belly
+        tol = HEAT_TOL_BARE + (HEAT_TOL_BELLY - HEAT_TOL_BARE) * safe * safe
+        if q3 > tol:
+            dmg += (q3 - tol) / HEAT_DMG_DIV * dt
+        maxheat = max(maxheat, q3 / tol)
+        if dmg >= 100:
+            return False, {'mode': mode, 'result': 'BURNED UP', 'maxheat': round(maxheat, 1),
+                           'vy': 999, 'vx': 999, 'x': round(x), 'fuel': round(fuel), 't': round(t, 1),
+                           'on_deck': False, 'vy_ok': False, 'vx_ok': False,
+                           'vx_min': round(vx_min, 2)}
+
+    result = {
+        'mode': mode, 'vy': round(-vy, 1), 'vx': round(abs(vx), 1),
+        'x': round(x), 'off': round(abs(x - deckX)), 'fuel': round(fuel), 't': round(t, 1),
+        'on_deck': abs(x - deckX) <= v['padHalf'],
+        'vy_ok': -vy <= v['OK_vy'], 'vx_ok': abs(vx) <= v['OK_vx'],
+        'vx_min': round(vx_min, 2),
+    }
+    # ocean/tower must actually reach the downrange deck AND touch down softly.
+    success = result['vy_ok'] and result['on_deck']
+    if verbose:
+        print(f"  {mode}: vy={result['vy']} (OK<={v['OK_vy']} {'PASS' if result['vy_ok'] else 'FAIL'}) "
+              f"vx={result['vx']} x={result['x']} deckX={deckX} off={result['off']} "
+              f"on_deck={result['on_deck']} vx_min={result['vx_min']} fuel={result['fuel']} t={result['t']}s")
+    return success, result
+
+
 def sim_landing(mode, verbose=False):
-    """Simulate a landing with a competent autopilot. Returns (success, details_dict)."""
+    """Simulate a landing with a competent autopilot. Returns (success, details_dict).
+    Ocean/tower NG boosters run the FAITHFUL climbing opening sequence (see _ng_landing); mars runs
+    a vacuum Apollo-style descent from its spawn."""
+    if mode in ('ocean', 'tower'):
+        return _ng_landing(mode, verbose)
+
     v = VEHICLES[mode]
     DRY, FUEL, THR, MDOT, G = v['DRY'], v['FUEL'], v['THR'], v['MDOT'], v['G']
     RHO0, HSCALE, CDA_AX, CDA_LAT = v['RHO0'], v['HSCALE'], v['CDA_AX'], v['CDA_LAT']
     s = v['spawn']
     x, y, vx, vy = float(s['x']), float(s['y']), float(s['vx']), float(s['vy'])
     fuel, t, dt = float(FUEL), 0.0, 0.02
-    SK = STRAKE_K * v.get('STRAKE_MULT', 1.0)
     dmg = 0.0; maxheat = 0.0
-    # start engine-first (retrograde) for the NG boosters so they don't cook broadside on frame 1
-    ang = math.atan2(-vx, -vy) if mode in ('ocean', 'tower') else (math.atan2(-vx, -vy) * 0.5 if mode == 'mars' else 0.4)
+    vx_min = vx   # track the minimum horizontal velocity over the whole descent (no-reversal check)
+    ang = math.atan2(-vx, -vy) * 0.5   # mars: half-retrograde lean at start
 
     while y > 0 and t < 600:
         m = DRY + fuel
         sp = math.hypot(vx, vy) or 1e-9
         ax, ay = 0, -G
 
-        # atmosphere + drag + strake lift
+        # atmosphere + drag (mars: RHO0=0 so these are inert, but kept for generality)
         r = rho(y, RHO0, HSCALE)
         atmoT = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
         vno = 0.0
@@ -79,64 +216,20 @@ def sim_landing(mode, verbose=False):
             nxx, nxy = axy, -axx
             vax = vx * axx + vy * axy
             vno = vx * nxx + vy * nxy
-            # reduced axial drag high in the entry regime (matches HTML axDragF): keeps the booster
-            # fast on the plunge so reentry heat is lethal without a decel burn.
-            axDragF = min(1, max(0.4, 1 - (y - ENTRY_Y) / 12000)) if mode in ('ocean', 'tower') else 1
-            Fax = -0.5 * r * CDA_AX * axDragF * abs(vax) * vax
+            Fax = -0.5 * r * CDA_AX * abs(vax) * vax
             Fno = -0.5 * r * CDA_LAT * abs(vno) * vno
             ax += (Fax * axx + Fno * nxx) / m
             ay += (Fax * axy + Fno * nxy) / m
-            # FLAT-PLATE STRAKE LIFT (matches the game stepPhysics after the fix):
-            # CL = sin(beta)*cos(beta), sign carried by sinB=vno/spd. Lift acts PERPENDICULAR
-            # to the velocity vector; a tiny |Flift|-gated along-velocity glide bonus extends
-            # (never reverses) the glide. SK's tower multiplier is folded into clk below.
-            if sp > 1:
-                sinB = max(-1.0, min(1.0, vno / sp))
-                cosB = math.sqrt(max(0.0, 1 - sinB * sinB))
-                CL = sinB * cosB
-                clk = CL_K * v.get('STRAKE_MULT', 1.0)
-                Flift = clk * r * sp * sp * CL * atmoT
-                cap = LIFT_CLAMP_G * m * G
-                if Flift > cap:
-                    Flift = cap
-                elif Flift < -cap:
-                    Flift = -cap
-                lvx, lvy = -vy / sp, vx / sp        # perpendicular to velocity (+90 CCW)
-                fvx, fvy = vx / sp, vy / sp          # along velocity
-                ax += Flift * lvx / m + abs(Flift) * GLIDE_K * fvx / m
-                ay += Flift * lvy / m + abs(Flift) * GLIDE_K * fvy / m
 
-        # AUTOPILOT: mode-appropriate strategy
+        # AUTOPILOT (Apollo: retro-brake to kill horizontal, coast, vertical arrest).
         stop_dist = vy * vy / (2 * max(0.01, THR / m - G)) if THR / m > G else 1e9
-        if mode == 'mars':
-            # Apollo: retro-brake to kill horizontal, coast, vertical arrest (throttle-managed).
-            # The key insight: in 1/6 g with TWR ~3, stop_dist is SHORT; but we also need to kill
-            # vx FIRST (horizontally) before going vertical. Two-phase approach:
-            if abs(vx) > 15:
-                # Phase 1: pure horizontal retrograde brake (kill cross-track)
-                ang = math.atan2(-vx, 0); thr = 1.0
-            elif y < 400 or (vy < -3 and y < stop_dist * 2):
-                # Phase 2: vertical arrest (throttle-managed for soft touchdown)
-                ang = max(-0.06, min(0.06, -vx * 0.003))
-                thr = min(1.0, max(0.3, (-vy - 2) / 15))  # ease down to vy≈-2
-            else:
-                ang = 0; thr = 0  # coast (save fuel)
-        elif mode in ('tower', 'ocean'):
-            # Downrange droneship landing: DECEL BURN (retrograde) fired HIGH, then GLIDE toward the
-            # downrange deck (at deckX), then terminal arrest. dist = signed distance to the deck.
-            dx0 = v.get('deckX', 0)
-            dist = dx0 - x
-            hot = (y > ENTRY_Y - 1500) and (sp > 220)
-            if hot:
-                ang = math.atan2(-vx, -vy); thr = 1.0                 # DECEL BURN, engine-first through the heat
-            elif y < stop_dist * 1.15 and vy < -4:
-                ang = max(-0.12, min(0.12, dist * 0.0004 - vx * 0.01)); thr = 1.0   # terminal arrest, drift to deck
-            elif dist > 500:
-                ang = 30 * math.pi / 180; thr = 0                     # glide right toward the deck (past the heat)
-            elif abs(vx) > 12:
-                ang = math.atan2(-vx, 0) * 0.3; thr = 0.5             # kill residual drift near deck
-            else:
-                ang = 0; thr = 0
+        if abs(vx) > 15:
+            ang = math.atan2(-vx, 0); thr = 1.0
+        elif y < 400 or (vy < -3 and y < stop_dist * 2):
+            ang = max(-0.06, min(0.06, -vx * 0.003))
+            thr = min(1.0, max(0.3, (-vy - 2) / 15))  # ease down to vy≈-2
+        else:
+            ang = 0; thr = 0  # coast (save fuel)
 
         if thr > 0 and fuel > 0:
             T = THR * thr
@@ -144,30 +237,18 @@ def sim_landing(mode, verbose=False):
             ay += T * math.cos(ang) / m
             fuel = max(0, fuel - MDOT * thr * dt)
 
-        # reentry heat (booster protected engines-first; broadside burns). Skip for vacuum (mars).
-        if RHO0 > 0:
-            hRamp = min(1, max(0, (ENTRY_Y + 2500 - y) / 2200))
-            q3 = r * sp ** 3 * hRamp
-            belly = abs(vno) / sp if sp > 1 else 1
-            safe = 1 - belly
-            tol = HEAT_TOL_BARE + (HEAT_TOL_BELLY - HEAT_TOL_BARE) * safe * safe
-            if q3 > tol:
-                dmg += (q3 - tol) / HEAT_DMG_DIV * dt
-            maxheat = max(maxheat, q3 / tol)
-
         vx += ax * dt; vy += ay * dt; x += vx * dt; y += vy * dt; t += dt
-        if dmg >= 100:
-            return False, {'mode': mode, 'result': 'BURNED UP', 'maxheat': round(maxheat, 1),
-                           'vy': 999, 'vx': 999, 'x': round(x), 'fuel': round(fuel), 't': round(t, 1),
-                           'on_deck': False, 'vy_ok': False, 'vx_ok': False}
+        if vx < vx_min:
+            vx_min = vx
 
     result = {
         'mode': mode, 'vy': round(-vy, 1), 'vx': round(abs(vx), 1),
         'x': round(x), 'off': round(abs(x - v.get('deckX', 0))), 'fuel': round(fuel), 't': round(t, 1),
         'on_deck': abs(x - v.get('deckX', 0)) <= v['padHalf'],
         'vy_ok': -vy <= v['OK_vy'], 'vx_ok': abs(vx) <= v['OK_vx'],
+        'vx_min': round(vx_min, 2),
     }
-    success = result['vy_ok']  # vy within tolerance is the primary landability check
+    success = result['vy_ok']  # mars: vy within tolerance is the primary landability check
     if verbose:
         print(f"  {mode}: vy={result['vy']} (OK<={v['OK_vy']} {'PASS' if result['vy_ok'] else 'FAIL'}) "
               f"vx={result['vx']} x={result['x']} fuel={result['fuel']} t={result['t']}s")
@@ -243,6 +324,24 @@ def test_decel_burn_required():
         print(f"  {mode}: no-decel={'BURNED UP' if burned_no else 'survived'} ({heat_no:.1f}x tol), "
               f"with-decel={'BURNED UP' if burned_yes else 'survived'} ({heat_yes:.1f}x tol) "
               f"{'PASS' if good else 'FAIL'}")
+        if not good:
+            ok = False
+    return ok
+
+
+def test_no_reversal():
+    """Verify the booster NEVER reverses horizontal direction during an ocean/tower descent.
+    Faithful to the real NG GS1: it lands downrange carrying its separation momentum (always
+    moving left->right, positive vx, no boostback/no direction reversal). We assert the MINIMUM
+    vx over the whole descent stays above a small negative tolerance (numerical noise near
+    touchdown). vx_min > -3.0 means the booster never truly reversed course."""
+    TOL = -3.0
+    ok = True
+    for mode in ('ocean', 'tower'):
+        _success, r = sim_landing(mode)
+        vx_min = r.get('vx_min', -999)
+        good = vx_min > TOL
+        print(f"  {mode}: vx_min={vx_min:.2f} (> {TOL} for no-reversal) {'PASS' if good else 'FAIL'}")
         if not good:
             ok = False
     return ok
@@ -375,20 +474,30 @@ def main():
     reach_ok = test_decel_burn_required()
     print(f"   {'PASS' if reach_ok else 'FAIL'}\n")
 
-    print("2c. Lift direction sane (flat-plate: aligned-with-flow < 40deg lean):")
+    print("2c. No horizontal reversal (booster always moves left->right, vx_min > -3.0):")
+    no_rev_ok = test_no_reversal()
+    print(f"   {'PASS' if no_rev_ok else 'FAIL'}\n")
+
+    print("2d. Lift direction sane (flat-plate: aligned-with-flow < 40deg lean):")
     lift_dir_ok = test_lift_direction_sane()
     print(f"   {'PASS' if lift_dir_ok else 'FAIL'}\n")
 
-    print("3. Landability (autopilot sim, each mission):")
+    print("3. Landability (autopilot sim; ocean/tower must land ON-DECK, mars vy-only):")
     land_ok = True
     for mode in modes:
         success, r = sim_landing(mode, verbose=True)
         if not success:
-            print(f"   WARNING: {mode} FAILED landability (vy={r['vy']} > OK={VEHICLES[mode]['OK_vy']})")
+            vm = VEHICLES[mode]
+            reasons = []
+            if not r.get('vy_ok', False):
+                reasons.append(f"vy={r['vy']} > OK={vm['OK_vy']}")
+            if mode in ('ocean', 'tower') and not r.get('on_deck', False):
+                reasons.append(f"OFF-DECK: x={r.get('x')} vs deckX={vm.get('deckX')} (off={r.get('off')} > padHalf={vm['padHalf']})")
+            print(f"   WARNING: {mode} FAILED landability ({'; '.join(reasons) or 'unknown'})")
             land_ok = False
     print(f"   {'PASS -- all missions landable' if land_ok else 'FAIL -- see above'}\n")
 
-    all_pass = mdot_ok and twr_ok and reach_ok and lift_dir_ok and land_ok
+    all_pass = mdot_ok and twr_ok and reach_ok and no_rev_ok and lift_dir_ok and land_ok
     print(f"{'ALL TESTS PASS' if all_pass else 'SOME TESTS FAILED'}")
     sys.exit(0 if all_pass else 1)
 
