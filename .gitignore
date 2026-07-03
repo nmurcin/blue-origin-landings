@@ -13,3 +13,44 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ============================================================================
+# SECURITY — this repo is PUBLIC on GitHub. Never let credentials or browser
+# state get committed. Defense-in-depth: even if `git add -A` is run by
+# mistake, these patterns keep secrets out. (Also enforced by .githooks/pre-commit.)
+# ============================================================================
+
+# Headless-Chrome bot profiles (testing/) — browser profiles can hold cookies,
+# "Login Data", and cached auth. They are throwaway (local file:// game only)
+# and MUST NOT be published. Ignore the profile dirs; keep the test CODE.
+testing/_chromeprofile/
+testing/_chromeprofile_cdp/
+testing/frames/
+**/_chromeprofile*/
+**/Default/Cookies
+**/Default/Login Data
+**/Default/Web Data
+
+# Secret / credential files — never commit any of these
+*.env
+.env*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa*
+id_ed25519*
+*credential*
+*secret*
+*.secrets
+secrets.*
+settings.local.json
+.claude/
+.npmrc
+.netrc
+service-account*.json
+gcp-*.json
+aws-credentials*
+*.token
+token.txt
