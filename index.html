@@ -422,9 +422,45 @@ const CL_K         = 120;     // flat-plate lift scale. NOT a drop-in for STRAKE
                               //   changed from (spd·aoa) to (spd²·sinβ·cosβ), so this is re-calibrated.
 const GLIDE_K      = 0.15;    // tiny along-velocity L/D bonus (|Flift|-gated so it only EXTENDS glide,
                               //   never reverses). WAS 0.90 — that behaved like a prograde THRUSTER (bug).
-const LIFT_CLAMP_G = 1.2;     // lift ceiling as a multiple of weight (m·G) — keeps it aero, not rocket.
+const LIFT_CLAMP_G = 2.0;     // lift ceiling as a multiple of weight (m·G). RAISED 1.2→2.0 for the
+                              //   heavy-tilt "super-glide" phase: a committed belly-flop lean now
+                              //   visibly arcs the trajectory downrange (Nathaniel: "moderate, clearly
+                              //   felt"). Still a ceiling — keeps lift aero, not a thruster.
 // (Tuned via local/scripts/bo_landings_glide_check.py: gives New Glenn a wider downrange reach
 //  window than the old grid-fin booster and a ~2.4 km steerable spread, while staying stable.)
+// --- SUPER-GLIDE (heavy-tilt phase) — the flagship NG descent, 4-phase profile ---------------
+//   1) decel burn (engine-first, high up)  2) HEAVY TILT glide (this)  3) re-vertical
+//   4) landing burn. Real NG "almost falls space-shuttle-like" during descent, less pronounced than
+//   a shuttle. In the glide phase the weathercock is retargeted from vertical toward a significant
+//   lean (~GLIDE_LEAN, ~30° from vertical) so the tilt HAPPENS on its own; the pilot fine-steers
+//   with ±, and below GLIDE_FLOOR_Y it auto-re-verticals for the landing burn.
+const GLIDE_LEAN     = 0.52;  // rad (~30° FROM VERTICAL) target BODY attitude in the glide phase. A
+                              //   SIGNIFICANT, shuttle-like lean — NOT a full belly-flop (per pilot:
+                              //   "~30 degrees from vertical … not 90"). The resulting angle-of-attack
+                              //   drives the flat-plate lift that carries her downrange.
+const GLIDE_TRIM_K   = 0.15;  // attitude-spring stiffness (rad/s² per rad of error) pulling the body
+                              //   toward GLIDE_LEAN, gated by atmoT so it's an aero trim (no effect in
+                              //   vacuum). With the existing rate-damping it settles to ~30° in a few
+                              //   seconds without oscillating (tuned in glide_phase_check.py).
+const GLIDE_TOP_Y    = 8300;  // m: glide phase begins below here (just under ENTRY_Y=8500) so the tilt
+                              //   engages the INSTANT the decel burn ends — the whole "second third" of
+                              //   the flight is the crossrange glide (per pilot). Gated by speed too.
+const GLIDE_FLOOR_Y  = 2100;  // m: below here the trim retargets to VERTICAL to set up the upright
+                              //   terminal landing burn. Between FLOOR and TOP = the heavy-tilt glide.
+                              //   LOWERED 2600→2100 to lengthen the coast/glide (pilot wants more time
+                              //   between the reentry burn and the landing burn); still ample room to
+                              //   straighten + land (the landing burn itself starts only a few hundred m up).
+const GLIDE_ENTRY_SPD = 260;  // m/s: only enter the tilt once slowed below this (past the hot decel
+                              //   regime, DECEL_SAFE_SPD=250) — above it we're still in the decel burn.
+// CROSSRANGE POWER in the glide phase (the flagship "second third"). Lift ∝ speed², so AFTER the decel
+// burn (speed bled to ~150-180 m/s) the dynamic pressure is ~6× lower than the fast PRE-burn regime the
+// pilot loves — an unboosted or lightly-boosted glide there feels weak. So we BOOST the lift hard in the
+// post-burn glide to restore that "amazing" crossrange authority at low speed. Only active when inGlide →
+// the fast pre-burn crossrange, the decel burn, and the terminal landing are ALL unaffected.
+const GLIDE_LIFT_BOOST = 3.6;  // ×lift during the post-burn glide (2.4→3.6): sized so post-burn lift ≈
+                               //   the ~1.7-1.8× weight that the fast pre-burn phase produces (which felt great).
+const GLIDE_CLAMP_G    = 5.0;  // lift ceiling (×weight) during the glide only (4.0→5.0 so the bigger boost
+                               //   isn't capped); base LIFT_CLAMP_G applies everywhere else.
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
 // acceleration, the resulting spin PERSISTS, and a light bleed (no air up here, so
 // this is reaction-wheel trim) lets a runaway rate be nulled in a few seconds.
@@ -641,9 +677,16 @@ const DECK_HALF_94 = 34;         // NG 9×4: smaller effective target — tighte
 // the whole way and vx never reversing. (An earlier offline sim predicted ~7050/8350 — those proved
 // UNREACHABLE in the real game, which carries the booster ~2.5× further; the bot telemetry is ground
 // truth.) Mars/moon lunar pad stays at x=0.
+// SUPER-GLIDE branch: the stronger lift (clamp 2.0) + heavy-tilt glide phase carry the booster
+// FARTHER downrange than the amazing build did, so Jacklyn must move RIGHT to stay landable. The
+// values below are PLACEHOLDERS bumped ~+35% for immediate playtest; the REAL positions are being
+// re-derived by the playing bot on THIS build (never trust the offline sim for landing point — it
+// underpredicts real-game carry ~2.5×; see bo-landings-testing-harness). Replace after the bot sweep.
 function deckX() {
-  if (mode === 'ocean') return 14000;  // NG 7×2 — real-game survivable band ~13.4–15.1 km, deck ahead whole descent
-  if (mode === 'tower') return 17000;  // NG 9×4 — real-game survivable band ~15.7–19.6 km (heavier + faster entry)
+  if (mode === 'ocean') return 16000;  // NG 7×2 — PLACEHOLDER. Pilot landed short at 19000 AND 18000; headless
+                                        //   probe shows the passive-glide projected touchdown is ~static (steady L/D,
+                                        //   doesn't keep reaching), so the deck was simply too far. Nudged left to 16000. bot-verify pending.
+  if (mode === 'tower') return 20000;  // NG 9×4 — PLACEHOLDER (tracks the ocean nudge; heavier/faster → a bit further). bot-verify pending
   return 0;                            // lunar pad
 }
 // Tower / chopsticks — RETAINED but unused (NG has no chopstick catch). Kept so the menu and
@@ -1743,6 +1786,10 @@ function stepPhysics(s, dt, thr, tq, fin) {
   // (NG booster modes only; moon/mars keep full drag.) axDragF: ~0.4 up high → 1.0 at/below entry.
   const ngBooster = (mode === 'ocean' || mode === 'tower');
   const axDragF = ngBooster ? Math.min(1, Math.max(0.4, 1 - (s.y - ENTRY_Y) / 12000)) : 1;
+  // GLIDE PHASE (the flagship "second third"): after the decel burn (slowed below GLIDE_ENTRY_SPD),
+  // in the mid-altitude band, still descending. Drives BOTH the auto-lean weathercock AND the
+  // crossrange lift boost below, so they engage/disengage together as one coherent phase.
+  const inGlide = ngBooster && s.vy < 0 && s.y < GLIDE_TOP_Y && s.y > GLIDE_FLOOR_Y && spd < GLIDE_ENTRY_SPD;
   const Fax = -0.5 * r * CDA_AX * axDragF * Math.abs(vax) * vax;
   const Fno = -0.5 * r * CDA_LAT * Math.abs(vno) * vno;
   if (mode === 'moon' && SHIP_MODE && Math.abs(s.ang) < 0.5) {
@@ -1785,9 +1832,13 @@ function stepPhysics(s, dt, thr, tq, fin) {
     const cosB = Math.sqrt(Math.max(0, 1 - sinB * sinB));
     const CL   = sinB * cosB;                               // = ½·sin(2β), sign carried by sinB
     const clk  = (mode === 'tower' ? CL_K * 1.35 : CL_K);   // keep the tower lift multiplier
-    let Flift  = clk * r * spdS * spdS * CL * atmoT;
+    // BOOST crossrange in the glide phase (the "second third") so the tilt flies the booster a LONG
+    // way downrange, as the pilot wants. Elsewhere (decel burn, terminal) lift is unboosted.
+    const liftBoost = inGlide ? GLIDE_LIFT_BOOST : 1;
+    let Flift  = clk * r * spdS * spdS * CL * atmoT * liftBoost;
     // Clamp so runaway dynamic pressure can't turn lift into a thruster — cap at a fraction of weight.
-    const cap  = LIFT_CLAMP_G * m * G;
+    // The glide phase uses a higher cap (GLIDE_CLAMP_G) so the boosted crossrange lift isn't capped.
+    const cap  = (inGlide ? GLIDE_CLAMP_G : LIFT_CLAMP_G) * m * G;
     if (Flift >  cap) Flift =  cap; else if (Flift < -cap) Flift = -cap;
     // Primary lift: perpendicular to velocity, +90° CCW basis (-vy, vx)/spd; CL's sign picks the side.
     const lvx = -rvy / spdS, lvy = rvx / spdS;
@@ -1820,12 +1871,30 @@ function stepPhysics(s, dt, thr, tq, fin) {
     // turn. High AoA is penalised by drag, not by burn-through.
     aacc -= 2.4e-5 * r * spd * vno * atmoT;
   } else {
-    // New Glenn fins + strakes give CONTINUOUS aerodynamic authority — no grid-fin stall
-    // lockout. A MINIMAL weathercock barely biases the body toward vertical — the strakes dominate,
-    // holding the vehicle at ~25-35 deg from vertical during the glide (matching user-requested feel
-    // of a significantly inclined, cross-range-heavy descent). The pilot uses fins to fine-steer.
-    // Ultra-weak (1.2e-5) so the natural equilibrium is a steep lean, not a vertical drop.
-    aacc -= 1.2e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
+    // SUPER-GLIDE weathercock — the flagship 4-phase NG descent. Instead of always trimming toward
+    // flow-alignment (β=0), the trim TARGET depends on the flight phase (see GLIDE_* consts):
+    //   • decel/high-speed regime → weathercock toward flow-alignment (engine-first) — do NOT force a
+    //     tilt into the hot hypersonic plunge.
+    //   • HEAVY-TILT glide band (GLIDE_FLOOR_Y < y < GLIDE_TOP_Y, slowed below GLIDE_ENTRY_SPD) →
+    //     an ATTITUDE SPRING pulls the BODY to ~GLIDE_LEAN (30° from vertical), leaned toward the
+    //     deck, so she falls shuttle-like and the flat-plate lift carries her DOWNRANGE on her own.
+    //     The pilot fine-steers ± around this trim.
+    //   • below GLIDE_FLOOR_Y → back to the vertical weathercock to stand her up for the landing burn.
+    // (inGlide computed once near the top of stepPhysics — shared with the crossrange lift boost.)
+    if (inGlide) {
+      // Target body attitude: GLIDE_LEAN rad from vertical, toward the deck. ang uses the body-axis
+      // (sin,cos) convention (ang=0 = nose up); a POSITIVE ang leans the nose toward +x (downrange,
+      // deck side) which puts the belly to the flow and throws lift downrange (sign verified). Lean
+      // toward whichever side the deck is on so the glide always carries toward Jacklyn.
+      const deckSide = (deckX() >= s.x) ? 1 : -1;
+      const targetAng = GLIDE_LEAN * deckSide;
+      let dA = targetAng - s.ang;
+      while (dA > Math.PI) dA -= 2 * Math.PI; while (dA < -Math.PI) dA += 2 * Math.PI;
+      aacc += GLIDE_TRIM_K * dA * atmoT;               // attitude spring (rate damping handled above)
+    } else {
+      // vertical weathercock (unchanged from the amazing build): trim the body toward flow-alignment.
+      aacc -= 1.2e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
+    }
   }
   // ROTATE ABOUT THE CENTER OF MASS, not the tracked base point. s.x/s.y is the booster's BASE
   // (engine end); physically the vehicle pivots about its CoM (~mid-body). Without this, changing
@@ -3843,6 +3912,55 @@ function drawReentryGuide() {
   hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
   ctx.restore();
 }
+// On-vehicle GLIDE director — the belly-flop-phase counterpart to drawReentryGuide. Active only in
+// the heavy-tilt glide band (below the decel window, above the landing floor). Shows an arrow toward
+// the deck and an attitude cue telling the player to lean into the glide and steer the ✕ onto Jacklyn,
+// then to straighten up as she nears the floor. Mirrors the reentry director's visual language.
+function drawGlideGuide() {
+  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
+  const spd = Math.hypot(b.vx, b.vy);
+  // gate to the same band the physics auto-lean uses (see GLIDE_* consts), plus a small display
+  // margin so the cue appears just as the belly-flop begins and fades as she re-verticals.
+  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
+  if (!inGlide) return;
+
+  const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
+  const straightenUp = b.y < (GLIDE_FLOOR_Y + 200);   // near the floor → cue the transition to vertical
+  // "Leaned" = the body has reached its glide attitude. The physics trims the BODY toward GLIDE_LEAN
+  // rad from vertical (|b.ang| is the lean from vertical), so measure that directly — within ~12°
+  // (0.21 rad) of the target flips the cue green like the reentry "✓". (Was comparing an angle-of-
+  // attack to the now-removed GLIDE_AOA constant, which threw a ReferenceError and crashed the render
+  // loop the moment the glide director activated — i.e. right at the reentry→glide transition.)
+  const leaned = Math.abs(b.ang) > (GLIDE_LEAN - 0.21);
+  const col = straightenUp ? '#e8b93c' : (leaned ? '#58d68d' : '#7cc4ff');
+
+  // arrow points DOWNRANGE toward the deck (the way the glide should carry her): screen +x = deck side
+  // for ocean/tower (deck is downrange, to the right). Draw a short dashed vector + gate brackets.
+  const dcx = deckX();
+  const dir = (dcx >= b.x) ? 1 : -1;          // toward the deck along downrange axis
+  const vlen = px(60);
+  const gx = bsx + dir * vlen, gy2 = bsy - px(10);
+
+  ctx.save();
+  ctx.strokeStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
+  ctx.setLineDash([px(5), px(5)]);
+  ctx.beginPath(); ctx.moveTo(bsx, bsy - px(10)); ctx.lineTo(gx, gy2); ctx.stroke();
+  ctx.setLineDash([]);
+  const ga = Math.atan2(gy2 - (bsy - px(10)), gx - bsx), br = px(11);
+  for (const s of [-1, 1]) {
+    const p1x = gx + Math.cos(ga + s * 1.4) * br, p1y = gy2 + Math.sin(ga + s * 1.4) * br;
+    const p2x = gx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
+    ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(gx, gy2); ctx.lineTo(p2x, p2y); ctx.stroke();
+  }
+  const STEER = MOBILE ? 'steer' : '← →';
+  const msg = straightenUp ? 'STRAIGHTEN UP FOR LANDING'
+            : leaned ? 'BELLY-FLOP GLIDE ✓ — steer to the deck'
+            : 'LEAN INTO THE GLIDE (' + STEER + ')';
+  hudText(msg, gx, gy2 - px(24), 10, col, 'center');
+  const sub = straightenUp ? 'ease vertical, ready the landing burn' : 'fly the ✕ onto Jacklyn';
+  hudText(sub, gx, gy2 - px(12), 9, col, 'center');
+  ctx.restore();
+}
 // Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
 // (burn-through). Returns Infinity if it never does (already safe / slow enough). Cheap: coarse dt.
 // HORIZON = 700 × 0.15s ≈ 105s: the decel burn happens HIGH (~23 km) where the heat pulse is still
@@ -4543,7 +4661,14 @@ function flightHint() {
       }
       warn = true;
     } else if (b.y > 3500) {
-      hint = 'COAST — ride the strakes toward Jacklyn, glide the ✕ onto the deck';
+      // HEAVY-TILT GLIDE phase — the flagship belly-flop (physics auto-leans in this band). Tell the
+      // player the tilt is intentional and that leaning steers the ✕ onto the deck (matches the
+      // on-vehicle glide director).
+      hint = '↘ BELLY-FLOP GLIDE — let her lean, steer ' + STEER_K + ' to fly the ✕ onto Jacklyn';
+    } else if (b.y > 2000) {
+      // Transition across GLIDE_FLOOR_Y (2600): physics is re-verticaling — cue the player to stand
+      // her up for the terminal landing burn.
+      hint = 'STRAIGHTEN UP — ease vertical (' + STEER_K + ') and line up the deck for the landing burn';
     } else {
       const stop = predictBurnStop();
       const OK = landingSpec(mode).ok;
@@ -6551,6 +6676,7 @@ function drawChaseScene() {
     drawTargetPointer();
     drawMK1DistanceIndicator();
     drawReentryGuide();           // NG decel-burn phase: retrograde attitude director + corridor gate
+    drawGlideGuide();             // NG heavy-tilt glide phase: belly-flop lean + steer-to-deck director
     drawLandingSiteMarker();      // belly phase: persistent green ✛ on the pad (edge-clamped + distance)
     drawAscentGuide();            // launch gravity-turn guide (no-op in orbit)
     drawOrbitDirector();          // orbital BURN/PROGRADE director (no-op on launch)

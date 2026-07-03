@@ -1,0 +1,7 @@
+label,mode,burnStartAlt,bleedVx,glideLean,aNet,result,land_x,vx,vy,ang,fuel,dmg,reason,survived,vy_ok,vx_ok,vx_never_neg,min_vx,soft_touchdown
+BRAKE_HARD,ocean,8000,25,-2,10.5,WON,7011,0,0,-0.3,27806,65,Vertical speed  18.4 m/s,True,True,True,True,-0.3,True
+BRAKE_MED,ocean,7000,40,-2,10.5,LOST,7560,-0.04,-3.01,-0.5,27738,80,Missed Jacklyn by 466 m,True,True,True,True,0,True
+BRAKE_SOFT,ocean,6000,70,-2,10.5,LOST,7919,0.05,-2.99,-0.7,27681,80,Missed Jacklyn by 825 m,True,True,True,True,-0.8,True
+BRAKE_LIGHT,ocean,5000,110,-2,10.5,LOST,8181,0,-2.98,-0.5,27684,79,Missed Jacklyn by 1087 m,True,True,True,True,-1.4,True
+BRAKE_MIN,ocean,4200,170,-2,10.5,LOST,8282,0.56,-3,-0.9,27768,70,Missed Jacklyn by 1188 m,True,True,True,True,0.6,True
+COAST_MIN,ocean,500,999,-2,10.5,LOST,8139,1.03,-3.05,0.8,27713,67,Missed Jacklyn by 1045 m,True,True,True,True,-0.4,True
