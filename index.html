@@ -4697,7 +4697,7 @@ function flightHint() {
     return { hint, warn };
   }
   else if (b.t < 0.55) hint = 'STAGE SEPARATION...';
-  else if (b.t < 4 && Math.abs(b.angv) > 0.12) { hint = MOBILE ? 'TUMBLING — ' + MSTEER + ' against the spin' : 'TUMBLING — kill the spin with ← →'; warn = true; }
+  else if (b.t < 4 && Math.abs(b.angv) > 0.12) { hint = MOBILE ? 'TUMBLING — ' + STEER_K + ' against the spin' : 'TUMBLING — kill the spin with ← →'; warn = true; }
   else if (b.vx > 40) {
     // Two-burn NG descent (DECEL → coast → LANDING): hint based on altitude + speed
     if (b.y > T().entryY && Math.hypot(b.vx, b.vy) > 100)
@@ -4715,7 +4715,7 @@ function flightHint() {
     const OK = landingSpec(mode).ok;
     const stop = predictBurnStop();
     if (b.thr < 0.1 && stop && stop.y < 180) { hint = '⚠ BURN NOW — hold ' + BURN_K; warn = true; }
-    else if (b.y > 2600 || (b.thr < 0.1 && b.y > 1500)) hint = 'FINS & STRAKES — ' + (MOBILE ? MSTEER : 'lean ← →') + ' to glide the ✕ onto the target';
+    else if (b.y > 2600 || (b.thr < 0.1 && b.y > 1500)) hint = 'FINS & STRAKES — ' + (MOBILE ? STEER_K : 'lean ← →') + ' to glide the ✕ onto the target';
     else if (b.thr < 0.1) hint = 'Hold ' + BURN_K + ' to burn — kill speed before the deck';
     else hint = 'Set her on Jacklyn under ' + OK.vy + ' m/s, tilt < ' + OK.ang + '°';
   }
