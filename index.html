@@ -334,6 +334,8 @@ let THRUST   = 6.9e6;         // N, full throttle
 let MDOT     = 2150;          // kg/s at full throttle
 let CDA_AX   = 95;            // drag area, tail-first (fins + skirt)
 let CDA_LAT  = 195;           // drag area, broadside
+const REENTRY_DRAG_MUL = 1.6; // ×axial drag for the NG booster reentry — lengthens the reentry phase
+                              //   at slower, more realistic speeds (paired with the raised spawn).
 let RHO0     = 1.225, HSCALE = 8500;     // exponential atmosphere
 let FLIP_Y   = 3000;          // m, ship-mode landing-flip altitude
 // SHIP_MODE is LIVE (not dead): set true only in mars/MK1 (see startMode), where it switches the
@@ -1536,6 +1538,9 @@ let scene = 'menu';   // menu | flying | done | paused
 let mode = 'ocean';   // ocean | tower
 let b = null;         // booster state
 let reentryDirAng = null;   // slewed reentry-director attitude (rad); null = re-seed to optimal on next show
+let glideMarkFrac = null;   // slewed localizer needle position (signed frac); null = re-seed
+let glideLockT = 0;         // seconds held on-track (debounced lock)
+let glidePrevShown = false; // was the localizer instrument drawn last frame (for hold-dim on forecast dropout)
 let ship = null;      // the Starship riding on top until stage separation
 let discard = null;   // jettisoned Super Heavy tumbling away after staging (moon)
 let env = null;       // per-run environment (wind)
@@ -1623,6 +1628,7 @@ let clouds = [];
 function newRun(m) {
   mode = m;
   reentryDirAng = null;   // re-seed the reentry director to optimal on this run's first frame
+  glideMarkFrac = null; glideLockT = 0; glidePrevShown = false;   // re-seed the glide localizer
   // anti-cheat: mint a one-time run token now; submitScore spends it on a win. The server
   // rejects scores with no/used/instant token, so a forged "submit 5000" can't board.
   runToken = null;
@@ -1678,10 +1684,10 @@ function newRun(m) {
     // strake-dependent than the 7×2 (heavier, faster entry). This is the flagship NG mechanic.
     // Spawn scales with the realism tier.
     b = {
-      x: -(15000 + Math.random() * 1000) * T().bAltMul,  // ~15 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~17000)
-      y: (13000 + Math.random() * 400) * T().bAltMul,
-      vx: (550 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier, hotter Mach-class entry)
-      vy: -(600 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
+      x: -(15000 + Math.random() * 1000) * T().bAltMul,  // ~15 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~20000)
+      y: (18000 + Math.random() * 500) * T().bAltMul,    // RAISED ~13k→18k: taller corridor, longer reentry (higher than 7×2)
+      vx: (460 + Math.random() * 50) * T().bSpdMul,     // FASTER than 7×2 (heavier) but slower than before — longer, hotter decel
+      vy: -(520 + Math.random() * 60) * T().bSpdMul,    // steeper/hotter — DECEL BURN mandatory or burn-up
       ang: -15 * Math.PI / 180,   // slight lean toward the deck (body tilted for strake lift)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -1702,10 +1708,10 @@ function newRun(m) {
     // Momentum carries it ONTO the deck without ever reversing. The 7×2 is the easier/closer
     // version; the 9×4 is the same concept but faster/further/tighter.
     b = {
-      x: -(13500 + Math.random() * 800) * T().bAltMul,  // ~13.5 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~14000)
-      y: (11000 + Math.random() * 400) * T().bAltMul,
-      vx: (450 + Math.random() * 40) * T().bSpdMul,     // FAST downrange (Mach-class energy) → long glide
-      vy: -(480 + Math.random() * 60) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up
+      x: -(13500 + Math.random() * 800) * T().bAltMul,  // ~13.5 km LEFT — momentum carries it downrange onto Jacklyn (deckX ~16000)
+      y: (16000 + Math.random() * 500) * T().bAltMul,   // RAISED ~11k→16k: a taller entry corridor so the reentry phase runs LONGER
+      vx: (380 + Math.random() * 40) * T().bSpdMul,     // SLOWER entry than before (Mach-class but calmer) — longer, more realistic decel
+      vy: -(420 + Math.random() * 50) * T().bSpdMul,    // steep hot entry — a DECEL BURN is REQUIRED or she burns up
       ang: 45 * Math.PI / 180,   // angled up-and-right (just separated from the stack, launch attitude)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
@@ -1787,8 +1793,12 @@ function stepPhysics(s, dt, thr, tq, fin) {
   // booster stays fast as it plunges — making reentry genuinely lethal unless you DECEL BURN to
   // bleed speed. Below the interface, full axial drag returns for the terminal glide/landing.
   // (NG booster modes only; moon/mars keep full drag.) axDragF: ~0.4 up high → 1.0 at/below entry.
+  // REENTRY_DRAG_MUL scales up the booster's axial drag so she decelerates harder and the reentry
+  // phase runs LONGER at slower speeds (pilot: "drag really increases here, speeds a lot slower in
+  // real life"). Sim-tuned with the raised spawn to ~3× the old reentry-regime time (see
+  // testing/reentry_duration_check.py). Only applies to the NG booster's tail-first axial drag.
   const ngBooster = (mode === 'ocean' || mode === 'tower');
-  const axDragF = ngBooster ? Math.min(1, Math.max(0.4, 1 - (s.y - ENTRY_Y) / 12000)) : 1;
+  const axDragF = ngBooster ? Math.min(1, Math.max(0.4, 1 - (s.y - ENTRY_Y) / 12000)) * REENTRY_DRAG_MUL : 1;
   // GLIDE PHASE (the flagship "second third"): after the decel burn (slowed below GLIDE_ENTRY_SPD),
   // in the mid-altitude band, still descending. Drives BOTH the auto-lean weathercock AND the
   // crossrange lift boost below, so they engage/disengage together as one coherent phase.
@@ -3944,26 +3954,27 @@ function drawReentryGuide() {
   hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
   ctx.restore();
 }
-// On-vehicle GLIDE STEER-DIRECTOR — the glide-phase counterpart to drawReentryGuide, redesigned so it
-// is FULLY ACTIONABLE with the deck AND the ✕ predictor OFF-SCREEN (they almost always are up here).
-// It references NOTHING off-screen: everything is driven by the single scalar
-//   miss = deckX() - predictTrajectory().last.x   (+ = landing SHORT / left of deck, - = LONG)
-// and rendered ON the booster in the reentry-director's grammar:
-//   • a horizontal STEER ARROW whose DIRECTION = which way to steer and LENGTH = how far off,
-//   • a GATE that pinches to a tight green V as the miss → 0 (locked on track),
-//   • a CHASE TAPE (short↔long rail) whose marker sits on the SAME side you must push, so steering
-//     correctly visibly walks it to the center notch,
-//   • two text lines: STEER LEFT/RIGHT + the miss distance.
-// CHASE convention (verified against stepPhysics: ArrowRight → +b.ang → lift/thrust downrange → lands
-// further right): a SHORT miss (miss>0) is cured by steering RIGHT, and the marker sits RIGHT too.
-const GLIDE_TAPE_FULL = 3000;   // m: miss magnitude that saturates the arrow/tape (signed-sqrt compress)
+// On-vehicle GLIDE LOCALIZER — the glide-phase counterpart to drawReentryGuide. FULLY ACTIONABLE with
+// the deck AND the ✕ predictor OFF-SCREEN (they almost always are up here): references NOTHING
+// off-screen. Driven by the single scalar miss = deckX() - predictTrajectory().last.x (+ = landing
+// SHORT/left-of-deck, - = LONG). Rendered as an aircraft-ILS-style LOCALIZER fixed on the booster:
+//   • a horizontal SCALE with a permanent center notch (the deck) and a green DETENT CORRIDOR whose
+//     half-width = the 250 m deadband — a spatially-literal "on track" box you fly the needle into,
+//   • a single DEVIATION NEEDLE (triangle + stem) on the SAME side you must push (chase convention),
+//     damped so it glides instead of twitching when the forecast wobbles,
+//   • ONE bold text line (verb + distance); a debounced LOCKED chip only after ~0.6 s on track.
+// Steer sign verified vs stepPhysics: ArrowRight → +b.ang → lift downrange → lands further right, so a
+// SHORT miss (miss>0) is cured by steering RIGHT and the needle deflects RIGHT — fly it back to center.
+const GLIDE_TAPE_FULL = 3000;   // m: miss magnitude that saturates the needle (signed-sqrt compress)
 const GLIDE_DEADBAND  = 250;    // m: within this, "ON TRACK" — terminal landing burn absorbs the rest
+const GLIDE_MARK_SLEW = 0.25;   // per-frame low-pass toward the needle target (damped, jitter-immune)
+const GLIDE_LOCK_HOLD = 0.6;    // s on-track before the LOCKED chip latches (debounces a 1-frame blip)
 function drawGlideGuide() {
   if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
   const spd = Math.hypot(b.vx, b.vy);
   // same band the physics auto-lean uses (GLIDE_* consts) + a small display margin.
   const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
-  if (!inGlide) return;
+  if (!inGlide) { glidePrevShown = false; return; }
 
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
   const ax = bsx, ay = bsy - px(10);                 // anchor (lifted off the booster)
@@ -3971,13 +3982,16 @@ function drawGlideGuide() {
   const leaned = Math.abs(b.ang) > (GLIDE_LEAN - 0.21);   // has she settled into the glide lean yet
   const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
   const STEER = MOBILE ? 'steer' : '';
+  const HW = px(60), ty = ay + px(20);
+  const detentFrac = Math.sqrt(GLIDE_DEADBAND / GLIDE_TAPE_FULL);   // corridor half-width on the scale (~0.29)
 
   ctx.save();
 
-  // STRAIGHTEN override — highest priority, hides the steer instrument.
+  // STRAIGHTEN override — highest priority, hides the instrument.
   if (straightenUp) {
-    hudText('STRAIGHTEN UP FOR LANDING', ax, ay - px(24), 10, '#e8b93c', 'center');
-    hudText('ease vertical, ready the landing burn', ax, ay - px(12), 9, '#e8b93c', 'center');
+    hudText('STRAIGHTEN UP FOR LANDING', ax, ay - px(20), 10, '#e8b93c', 'center');
+    hudText('ease vertical, ready the landing burn', ax, ay - px(8), 9, '#e8b93c', 'center');
+    glidePrevShown = false;
     ctx.restore();
     return;
   }
@@ -3990,71 +4004,90 @@ function drawGlideGuide() {
     if (last && traj.length >= 2 && last.y <= 50) miss = deckX() - last.x;   // + = SHORT, - = LONG
   } catch (e) { miss = null; }
 
-  // ENTERING / SETTLING, or no usable forecast → just tell them to lean in (dim tape only).
-  if (miss === null || !leaned) {
-    hudText('GLIDE — WALK THE LANDING IN', ax, ay - px(24), 10, '#7cc4ff', 'center');
-    hudText('lean to steer' + (STEER ? '  (' + STEER + ')' : '  (← →)'), ax, ay - px(12), 9, '#7cc4ff', 'center');
-    // faint rail so the instrument's location is established before it activates
-    const HW = px(60);
-    ctx.strokeStyle = 'rgba(140,160,175,0.35)'; ctx.lineWidth = px(3); ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(ax - HW, ay + px(20)); ctx.lineTo(ax + HW, ay + px(20)); ctx.stroke();
+  // Helper: draw the localizer rail + detent corridor + SHORT/LONG labels. greenFill 0..1 ramps the
+  // corridor fill as the lock timer builds.
+  const drawRail = (greenFill) => {
+    ctx.strokeStyle = 'rgba(140,160,175,0.5)'; ctx.lineWidth = px(3); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(ax - HW, ty); ctx.lineTo(ax + HW, ty); ctx.stroke();
+    // detent corridor (the "deck box"): two green posts + translucent fill
+    const dw = detentFrac * HW;
+    if (greenFill > 0) { ctx.fillStyle = 'rgba(88,214,141,' + (0.12 + 0.33 * greenFill).toFixed(3) + ')'; ctx.fillRect(ax - dw, ty - px(5), dw * 2, px(10)); }
+    ctx.strokeStyle = 'rgba(88,214,141,0.9)'; ctx.lineWidth = px(2);
+    for (const t of [-dw, dw]) { ctx.beginPath(); ctx.moveTo(ax + t, ty - px(5)); ctx.lineTo(ax + t, ty + px(5)); ctx.stroke(); }
+    // center notch (the deck itself)
+    ctx.strokeStyle = 'rgba(200,220,235,0.8)'; ctx.lineWidth = px(1);
+    ctx.beginPath(); ctx.moveTo(ax, ty - px(4)); ctx.lineTo(ax, ty + px(4)); ctx.stroke();
+    hudText('SHORT', ax - HW - px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'right');
+    hudText('LONG', ax + HW + px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'left');
+  };
+
+  // ENTERING / SETTLING, or no PRIOR reading yet → invite the lean, preview the empty corridor.
+  if ((miss === null && glideMarkFrac === null) || !leaned) {
+    hudText('GLIDE — TRIM THE LANDING IN', ax, ay - px(20), 10, '#7cc4ff', 'center');
+    hudText('lean to steer' + (STEER ? '  (' + STEER + ')' : '  (← →)'), ax, ay - px(8), 9, '#7cc4ff', 'center');
+    drawRail(0);
+    glidePrevShown = false;
     ctx.restore();
     return;
   }
 
-  const amiss = Math.abs(miss);
-  const dir = Math.sign(miss) || 1;                 // +1 = short = steer RIGHT; -1 = long = steer LEFT
-  const frac = Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));   // 50m→.13, 500m→.41, 3km→1
-  const onTrack = amiss <= GLIDE_DEADBAND;
-  // color: green locked; else amber→orange→red as the miss grows (reentry-director palette)
-  const col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+  // HOLD-DIM: forecast dropped out this frame but we have a prior needle → hold it, dim to 55%, no thrash.
+  let holdAlpha = 1;
+  if (miss === null) { holdAlpha = 0.55; }
 
-  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
-
-  // (1) STEER VECTOR — horizontal, points the way to steer; length grows with the miss. Hidden when locked.
-  const vlen = px(24) + frac * px(56);
-  const gx = ax + dir * vlen, gy = ay;
-  if (!onTrack) {
-    ctx.setLineDash([px(5), px(5)]);
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(gx, gy); ctx.stroke();
-    ctx.setLineDash([]);
-  }
-  // (2) GATE brackets at the tip — pinch to a tight V as the error shrinks (spread wide when far off).
-  const spread = onTrack ? 0.28 : 0.30 + frac * 1.1;
-  const ga = Math.atan2(gy - ay, gx - ax) || 0, br = px(11);
-  const tipx = onTrack ? ax : gx, tipy = gy;
-  for (const s of [-1, 1]) {
-    const p1x = tipx + Math.cos(ga + s * spread) * br, p1y = tipy + Math.sin(ga + s * spread) * br;
-    const p2x = tipx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = tipy + Math.sin(ga + s * 0.5) * br * 1.7;
-    ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(tipx, tipy); ctx.lineTo(p2x, p2y); ctx.stroke();
-  }
-  // (3) CHASE TAPE — short↔long rail; marker on the SAME side you push, walks to center as you fix it.
-  const HW = px(60), ty = ay + px(20);
-  ctx.strokeStyle = 'rgba(140,160,175,0.5)'; ctx.lineWidth = px(3);
-  ctx.beginPath(); ctx.moveTo(ax - HW, ty); ctx.lineTo(ax + HW, ty); ctx.stroke();
-  // center notch (deck-on-tape) + tick posts
-  ctx.strokeStyle = onTrack ? '#58d68d' : 'rgba(180,200,215,0.7)'; ctx.lineWidth = px(2);
-  for (const t of [-px(8), px(8)]) { ctx.beginPath(); ctx.moveTo(ax + t, ty - px(4)); ctx.lineTo(ax + t, ty + px(4)); ctx.stroke(); }
-  hudText('SHORT', ax - HW - px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'right');
-  hudText('LONG', ax + HW + px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'left');
-  // marker
-  const mx = ax + dir * frac * HW;
-  ctx.fillStyle = col;
-  ctx.beginPath(); ctx.moveTo(mx, ty - px(5)); ctx.lineTo(mx - px(4), ty + px(2)); ctx.lineTo(mx + px(4), ty + px(2)); ctx.closePath(); ctx.fill();
-
-  // (4) TEXT — action on top, magnitude below.
-  let top, sub;
-  if (onTrack) {
-    top = 'ON TRACK ✓  hold it'; sub = 'walking onto Jacklyn';
-  } else if (dir > 0) {
-    top = 'STEER RIGHT' + (STEER ? '' : ' →') + '  (add downrange)';
-    sub = 'SHORT ' + fmt(amiss) + ' — push toward the deck';
+  // When we have a live miss, update targets + the debounced lock timer.
+  let amiss, dir, frac, onTrack, col;
+  if (miss !== null) {
+    amiss = Math.abs(miss);
+    dir = Math.sign(miss) || 1;                       // +1 = short = steer RIGHT; -1 = long = steer LEFT
+    frac = Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));
+    onTrack = amiss <= GLIDE_DEADBAND;
+    col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+    glideLockT = onTrack ? Math.min(GLIDE_LOCK_HOLD + 0.5, glideLockT + 0.016) : 0;
+    // slew the needle toward its signed target (chase side); seed on first reading.
+    const target = dir * frac;
+    if (glideMarkFrac === null) glideMarkFrac = target;
+    else glideMarkFrac += (target - glideMarkFrac) * GLIDE_MARK_SLEW;
   } else {
-    top = 'STEER LEFT' + (STEER ? '' : ' ←') + '  (bleed downrange)';
-    sub = 'LONG ' + fmt(amiss) + ' — ease off the deck';
+    // held reading — recolor from the held needle position (no lock advance)
+    const held = glideMarkFrac;
+    const heldMiss = Math.sign(held) * (held * held) * GLIDE_TAPE_FULL;
+    amiss = Math.abs(heldMiss); dir = Math.sign(held) || 1;
+    frac = Math.min(1, Math.abs(held)); onTrack = amiss <= GLIDE_DEADBAND;
+    col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
   }
-  hudText(top, ax, ay - px(24), 10, col, 'center');
-  hudText(sub, ax, ay - px(12), 9, col, 'center');
+  const locked = onTrack && glideLockT >= GLIDE_LOCK_HOLD;
+  const pinned = frac >= 0.999;
+
+  ctx.globalAlpha = holdAlpha;
+  drawRail(Math.min(1, glideLockT / GLIDE_LOCK_HOLD));
+
+  // DEVIATION NEEDLE — triangle + stem at the slewed position; on the side you must push.
+  const mx = ax + Math.max(-1, Math.min(1, glideMarkFrac)) * HW;
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(mx, ty - px(11)); ctx.lineTo(mx, ty - px(3)); ctx.stroke();   // stem
+  if (pinned) {
+    // hollow OUTWARD chevron + red rail-end cap = "keep steering", not "arrived"
+    ctx.beginPath();
+    ctx.moveTo(mx - dir * px(6), ty - px(9)); ctx.lineTo(mx + dir * px(2), ty - px(4)); ctx.lineTo(mx - dir * px(6), ty + px(1));
+    ctx.stroke();
+    ctx.fillRect(ax + dir * HW - (dir > 0 ? px(3) : 0), ty - px(6), px(3), px(12));
+  } else {
+    ctx.beginPath(); ctx.moveTo(mx, ty + px(1)); ctx.lineTo(mx - px(5), ty - px(6)); ctx.lineTo(mx + px(5), ty - px(6)); ctx.closePath(); ctx.fill();
+  }
+
+  // ONE bold text line (verb + distance); direction carried by the deflected needle + rail labels.
+  let msg;
+  if (locked)        msg = 'LOCKED — walking onto Jacklyn';
+  else if (onTrack)  msg = 'ON TRACK ✓  hold it';
+  else if (dir > 0)  msg = 'STEER RIGHT' + (STEER ? '' : ' →') + '  ·  SHORT ' + (pinned ? '>' : '') + fmt(amiss);
+  else               msg = 'STEER LEFT' + (STEER ? '' : ' ←') + '  ·  LONG ' + (pinned ? '>' : '') + fmt(amiss);
+  hudText(msg, ax, ay - px(12), 11, col, 'center');
+  if (locked) hudText('LOCKED', ax, ty + px(15), 7, '#58d68d', 'center');
+  else if (miss === null) hudText('reading settling', ax, ty + px(15), 7, 'rgba(150,165,180,0.8)', 'center');
+
+  ctx.globalAlpha = 1;
+  glidePrevShown = true;
   ctx.restore();
 }
 // Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
