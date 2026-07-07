@@ -686,10 +686,8 @@ const DECK_HALF_94 = 34;         // NG 9×4: smaller effective target — tighte
 // re-derived by the playing bot on THIS build (never trust the offline sim for landing point — it
 // underpredicts real-game carry ~2.5×; see bo-landings-testing-harness). Replace after the bot sweep.
 function deckX() {
-  if (mode === 'ocean') return 16000;  // NG 7×2 — PLACEHOLDER. Pilot landed short at 19000 AND 18000; headless
-                                        //   probe shows the passive-glide projected touchdown is ~static (steady L/D,
-                                        //   doesn't keep reaching), so the deck was simply too far. Nudged left to 16000. bot-verify pending.
-  if (mode === 'tower') return 20000;  // NG 9×4 — PLACEHOLDER (tracks the ocean nudge; heavier/faster → a bit further). bot-verify pending
+  if (mode === 'ocean') return 12000;  // NG 7×2 — pilot playtest: moved 4 km LEFT total from 16000 (2 km, then 2 km more).
+  if (mode === 'tower') return 16000;  // NG 9×4 — tracks the ocean nudge (16000→12000 => 20000→16000).
   return 0;                            // lunar pad
 }
 // Tower / chopsticks — RETAINED but unused (NG has no chopstick catch). Kept so the menu and
