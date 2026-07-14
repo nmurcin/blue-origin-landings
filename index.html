@@ -2755,18 +2755,16 @@ function update(dt) {
   // spend RCS propellant while steering (separate bank from engine fuel); dry → RCS couple is
   // lost inside stepPhysics (fins/gimbal still work).
   if (tq && b.rcsFuel > 0) b.rcsFuel = Math.max(0, b.rcsFuel - RCS_BURN * Math.abs(tq) * dt);
-  // fin deflection eases in and out so the steering (and the line) sweep
-  // smoothly — quick to engage, gentle to release. smoothK() gives a frame-rate-INVARIANT
-  // exponential factor (1-e^-k·dt): same time constant at 30/60/120 fps (min(1,dt·k) drifted ~1-2%).
-  b.fin += (tq - b.fin) * smoothK(tq !== 0 ? 4 : 1.8, dt);
-  if (Math.abs(b.fin) < 0.02 && !tq) b.fin = 0;
-  // During the opening, the script commands GS1's throttle (openThr: full while FIRING, 0 after
-  // MECO). Once control hands off, the player's burn key takes over. Frame-rate-invariant ramp
-  // (b.thr feeds the gimbal-authority term thr·1.3, so a frame-dependent ramp made attitude diverge).
+  // Throttle + fin command TARGETS. The first-order smoothing toward them (smoothK) is applied
+  // INSIDE the substep loop below at sdt, not once per frame — so the SUB-FRAME throttle/fin
+  // trajectory is frame-rate-invariant, not merely the per-frame sampled value. This matters because
+  // b.thr feeds both the fuel burn and the gimbal-authority term (thr·1.3): a once-per-frame ramp
+  // left a residual 30-vs-120 Hz divergence (~14 kg fuel, ~0.14° attitude) during the ~0.35 s ramp.
+  // smoothK is frame-rate-INVARIANT (1-e^-k·dt): two sdt-steps telescope EXACTLY to one dt-step, so
+  // the ramped value after a frame is unchanged AND the intra-frame path now matches every frame rate.
   const burn = !locked && (keys[' '] || keys['ArrowUp'] || burnHeld);
+  const finTarget = tq, finK = (tq !== 0 ? 4 : 1.8);
   const thrCmd = locked ? openThr : (burn ? 1 : 0);
-  b.thr += (thrCmd - b.thr) * smoothK(8, dt);
-  if (b.thr < 0.02 && !burn && !locked) b.thr = 0;
 
   // turbulence buffets the booster at high dynamic pressure — keep trimming!
   // (none out in space: the buffet fades in with the atmosphere.) The kick is applied INSIDE the
@@ -2786,6 +2784,11 @@ function update(dt) {
   const steps = Math.min(400, Math.max(1, Math.ceil(dt / (1 / 120))));
   const sdt = dt / steps;
   for (let i = 0; i < steps; i++) {
+    // ramp throttle + fin per substep at sdt (see targets above): frame-rate-invariant sub-frame path.
+    b.thr += (thrCmd - b.thr) * smoothK(8, sdt);
+    if (b.thr < 0.02 && !burn && !locked) b.thr = 0;
+    b.fin += (finTarget - b.fin) * smoothK(finK, sdt);
+    if (Math.abs(b.fin) < 0.02 && !finTarget) b.fin = 0;
     lastHeat = stepPhysics(b, sdt, b.thr, tq);
     // turbulence buffet — integrated per substep (frame-rate-independent). qn recomputed from the
     // evolving state; turb sampled at this substep's time so the delivered angular impulse matches
