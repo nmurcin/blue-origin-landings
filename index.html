@@ -1985,6 +1985,10 @@ function predictTrajectory() {
   // Carries your live ATTITUDE + rotation (s.ang, s.angv) so tilting swings the path; it does NOT
   // apply held ArrowLeft/Right steering torque (that would make the ✕ jitter on taps) — the forecast
   // is a "hold this attitude + throttle" read, not a "keep steering" read.
+  // LIMITATION (measured, testing/predictor_glidek.py): intrinsic no-steer accuracy ~150 m over a
+  // ~5 km flight, but while you HOLD a steer key the ✕ can be off by 1.4–2.5 km, because it integrates
+  // tq=0. It is display-only (never perturbs the flown path) and still swings with body tilt; treat it
+  // as "where I'd land if I stopped steering and held this lean," not "where continued steering leads."
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: b.angv, fuel: b.fuel };
   const thrRaw = b.thr > 0.05 ? b.thr : 0;
   // The ✕ answers "where do I actually go if I HOLD what I'm doing right now?" — so it must include
@@ -2772,8 +2776,13 @@ function update(dt) {
   // of update(), so this frame spans [tFrame0, b.t]; we sample turb across that span per substep.
   const tFrame0 = b.t - dt;
 
-  // substep for stability (capped so a high manual warp in the atmosphere can't
-  // freeze the loop — physics gets coarse up there, but burn/RCS drops warp to ×1)
+  // BOUNDED VARIABLE SUBSTEP (not a true fixed-step accumulator — there is no carried remainder):
+  // each render frame is split into steps=ceil(dt·120) equal substeps, so sdt = dt/ceil(dt·120) lands
+  // in (~1/240, 1/120]. It's ALWAYS ≤ 1/120 s (fine enough for stable semi-implicit Euler here), but
+  // the exact sdt depends on the frame dt — e.g. 60 Hz→2 steps→8.33 ms, 59.94 Hz→3 steps→5.56 ms. So
+  // runs at different frame rates are very close but NOT bit-identical (measured drift is sub-metre /
+  // sub-0.01-rad over a full descent — see testing/frame_sweep.py). Capped at 400 steps so a big
+  // manual warp can't freeze the loop; burn/RCS input drops warp to ×1 for the live landing.
   const steps = Math.min(400, Math.max(1, Math.ceil(dt / (1 / 120))));
   const sdt = dt / steps;
   for (let i = 0; i < steps; i++) {

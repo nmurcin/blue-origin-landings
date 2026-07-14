@@ -26,6 +26,10 @@ desktop.ini
 testing/_chromeprofile/
 testing/_chromeprofile_cdp/
 testing/frames/
+testing/_prof_*/
+testing/_dbgprof*/
+testing/_chrome_stderr.txt
+testing/_baseline/
 **/_chromeprofile*/
 **/Default/Cookies
 **/Default/Login Data
