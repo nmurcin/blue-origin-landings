@@ -71,6 +71,15 @@ All line numbers are for the state at branch `physics-audit-2026-07-14` off `mai
   why different frame rates agree closely, but they are **not bit-identical** — measured drift over a full
   descent is sub-metre / sub-0.01-rad (see `testing/frame_sweep.py`). Describe it as "≤1/120 s bounded
   variable substep," never "fixed-step."
+- **Everything trajectory-affecting is now inside the substep loop:** stepPhysics forces, the turbulence
+  buffet, AND the throttle/fin smoothing ramps (`b.thr`/`b.fin`). The ramps were moved into the loop
+  (commit after 57cf1db) so the SUB-FRAME throttle trajectory — hence fuel burn and gimbal authority —
+  is frame-rate-invariant, not just the per-frame sampled value. Because `smoothK` telescopes exactly
+  (`smoothK(k,sdt)` applied `n` times == `smoothK(k,n·sdt)`), the end-of-frame value is unchanged, so
+  60 fps feel is preserved (measured 60fps drift vs the per-frame version: 0.14 m / 0.005° / 4.8 kg over
+  a 5 s maneuver). The only per-frame-updated quantities left are `b.t` (advanced once, sampled correctly
+  per substep) and `b.rcsFuel` (RCS spend — cosmetic bank, telescopes linearly). Coast + burn are now
+  bit-identical across 30/60/120 Hz (`testing/verify_ramp_fix.py`, `decompose_attitude.py` S7/S8).
 
 ## Touchdown (`evalTouchdown` L2305)
 - Fires when `y<=0`. Scores: `-vy` (descent speed) vs OK.vy, `|vx|` (drift) vs OK.vx,
