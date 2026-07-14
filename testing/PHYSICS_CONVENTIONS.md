@@ -63,8 +63,14 @@ All line numbers are for the state at branch `physics-audit-2026-07-14` off `mai
 ## Time step
 - Render frame: `dt = min(0.05, (now-lastT)/1000)` (L6815) — capped at 50 ms.
 - Optional `timeScale` (2×) or moon/mars warp multiplies dt BEFORE update.
-- Substep: `steps = min(400, max(1, ceil(dt/(1/120))))`, `sdt = dt/steps` (L2744-2746).
-  Physics effectively runs at ≤ 1/120 s fixed substep. This is the frame-rate-independence mechanism.
+- Substep: `steps = min(400, max(1, ceil(dt/(1/120))))`, `sdt = dt/steps`.
+- **This is a BOUNDED VARIABLE SUBSTEP, NOT a fixed-step accumulator.** There is no carried-remainder
+  accumulator anywhere; each frame is divided into `ceil(dt·120)` equal substeps, so `sdt = dt/ceil(dt·120)`
+  lands in `(~1/240, 1/120]` and its exact value depends on the frame dt (60 Hz → 2 steps → 8.33 ms;
+  59.94 Hz → 3 steps → 5.56 ms). It is always ≤ 1/120 s (stable for semi-implicit Euler here), which is
+  why different frame rates agree closely, but they are **not bit-identical** — measured drift over a full
+  descent is sub-metre / sub-0.01-rad (see `testing/frame_sweep.py`). Describe it as "≤1/120 s bounded
+  variable substep," never "fixed-step."
 
 ## Touchdown (`evalTouchdown` L2305)
 - Fires when `y<=0`. Scores: `-vy` (descent speed) vs OK.vy, `|vx|` (drift) vs OK.vx,

@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +34,11 @@ CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 GAME_HTML = os.path.join(REPO, "blue_origin_landings.html")
-PROFILE = os.path.join(HERE, "_chromeprofile_harness")
+# Use a FRESH temp profile per process (pid-tagged) so a prior force-kill can never leave a
+# SingletonLock that silently kills the next launch. Cleaned up by Chrome.close()/OS temp reaper.
+# NOTE: never run `taskkill /F /IM chrome.exe` — it kills the user's real browser AND corrupts
+# whatever profile was open. Use testing/kill_test_chrome.ps1 (matches only our profile paths).
+PROFILE = os.path.join(tempfile.gettempdir(), f"bo_landings_prof_{os.getpid()}")
 
 # file:// URL Chrome wants (Windows path -> forward slashes, file:///C:/...)
 GAME_URL = "file:///" + GAME_HTML.replace("\\", "/")
@@ -144,15 +149,17 @@ window.__H = (function () {
 
 
 class Harness:
-    def __init__(self):
-        self.chrome = Chrome(CHROME, PROFILE, port=0 or 9333,
-                             window=(900, 700))
+    def __init__(self, html_path=None, port=9333, profile=None):
+        # html_path lets a caller point the harness at a DIFFERENT build (e.g. the extracted
+        # baseline b6444b7) for A/B regression testing. Defaults to the current working-tree build.
+        self.url = ("file:///" + os.path.abspath(html_path).replace("\\", "/")) if html_path else GAME_URL
+        self.chrome = Chrome(CHROME, profile or PROFILE, port=port, window=(900, 700))
 
     def start(self):
         self.chrome.launch()
         self.chrome.send("Page.enable")
         self.chrome.send("Runtime.enable")
-        self.chrome.send("Page.navigate", {"url": GAME_URL})
+        self.chrome.send("Page.navigate", {"url": self.url})
         # wait for load
         try:
             self.chrome.wait_event("Page.loadEventFired", timeout=20)
