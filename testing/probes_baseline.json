@@ -1,0 +1,92 @@
+{
+  "P1_dead_fin": {
+    "detail": {
+      "dAng": 0,
+      "dAngv": 0,
+      "dVx": 0,
+      "dVy": 0,
+      "a": {
+        "ang": 0.20000333333333334,
+        "angv": 0.0004
+      },
+      "b": {
+        "ang": 0.20000333333333334,
+        "angv": 0.0004
+      }
+    },
+    "fin_has_no_effect": true
+  },
+  "P6_com_pivot": {
+    "detail": {
+      "dComX": 6.366576599248219e-09,
+      "dComY": -1.2466873871017015,
+      "baseMoved": 6.182601612674341,
+      "ang": 0.23889269141752262,
+      "angv": 0.456934717621278
+    },
+    "com_fixed": false,
+    "base_swings": true
+  },
+  "P2_thr_smoothing_framerate": {
+    "thr_after_0.25s_30hz": 0.8815581709861964,
+    "thr_after_0.25s_120hz": 0.8646647167633871,
+    "diff": 0.0168934542228093,
+    "frame_rate_dependent": false
+  },
+  "P3_turbulence_framerate": {
+    "30hz": {
+      "angv": -0.19998962487466274,
+      "ang": -0.12185016086848303,
+      "y": 5805.697598876473
+    },
+    "120hz": {
+      "angv": -0.19998962487466282,
+      "ang": -0.12185016086848303,
+      "y": 5805.697598876473
+    },
+    "angv_diff": 8.326672684688674e-17,
+    "frame_rate_dependent": false
+  },
+  "P4_predictor_tq": {
+    "detail": {
+      "predEndX": 1138.5053781891443,
+      "steerEndX": 1769.1535379312963,
+      "nPts": 28
+    },
+    "predictor_ignores_active_steer": true,
+    "note": "predictTrajectory passes tq=0; the X cannot bend with live ArrowLeft/Right torque, only with body tilt already integrated into ang. steerEndX shows where active steer goes."
+  },
+  "P5_full_update_invariance": {
+    "s30": {
+      "x": -4847.2,
+      "y": 7926.19,
+      "vx": 200.19,
+      "vy": -192.26,
+      "ang": -0.15,
+      "angv": 4.25,
+      "fuel": 56570.89
+    },
+    "s60": {
+      "x": -4848.61,
+      "y": 7925.85,
+      "vx": 200.25,
+      "vy": -192.16,
+      "ang": -0.1,
+      "angv": 4.26,
+      "fuel": 56560.22
+    },
+    "s120": {
+      "x": -4849.0,
+      "y": 7925.86,
+      "vx": 200.25,
+      "vy": -192.11,
+      "ang": -0.08,
+      "angv": 4.26,
+      "fuel": 56555.06
+    },
+    "pos_30_vs_120": 1.82,
+    "vel_30_vs_120": 0.16,
+    "angv_30_vs_120": 0.0065,
+    "ang_30_vs_120": 0.0704
+  }
+}

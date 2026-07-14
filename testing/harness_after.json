@@ -1,0 +1,230 @@
+[
+  {
+    "key": "A",
+    "name": "A free-fall",
+    "ok": true,
+    "detail": {
+      "ay": -9.805888412506647,
+      "expected_ay": -9.81,
+      "ax": -0.013179035098005443,
+      "aacc": 0
+    }
+  },
+  {
+    "key": "B",
+    "name": "B axial-thrust",
+    "ok": true,
+    "detail": {
+      "ax": 0,
+      "ay": 7.5813043478260855,
+      "expected_ay": 7.5813043478260855,
+      "aacc": 0,
+      "T_over_m": 17.391304347826086
+    }
+  },
+  {
+    "key": "C",
+    "name": "C deceleration",
+    "ok": true,
+    "detail": {
+      "F": [
+        -1917702.1544168121,
+        3510330.247561491
+      ],
+      "dot_F_v": -1085606480.3956606,
+      "spd_before": 282.842712474619,
+      "spd_after": 280.39853646176596,
+      "thrust_opposes_v": true,
+      "speed_decreased": true
+    }
+  },
+  {
+    "key": "D",
+    "name": "D orientation/sign",
+    "ok": true,
+    "detail": {
+      "nose": {
+        "x": -0.479425538604203,
+        "y": 0.8775825618903728
+      },
+      "tail": {
+        "x": 0.479425538604203,
+        "y": -0.8775825618903728
+      },
+      "thrust": {
+        "x": -1917702.1544168121,
+        "y": 3510330.247561491,
+        "mag": 4000000
+      },
+      "checks": {
+        "nose_top_left": true,
+        "tail_bottom_right": true,
+        "thrust_up_left": true,
+        "thrust_opposite_tail": true
+      }
+    }
+  },
+  {
+    "key": "E",
+    "name": "E gimbal-torque",
+    "ok": true,
+    "detail": {
+      "aacc_plus": 1.5,
+      "aacc_minus": -1.5,
+      "symmetric": true,
+      "plus_tq_increases_ang": true
+    }
+  },
+  {
+    "key": "F",
+    "name": "F glide-slope",
+    "ok": true,
+    "detail": {
+      "x0": 6000,
+      "x1": 6156.905948700912,
+      "y0": 5200.0,
+      "y1": 5030.638766576438,
+      "ang1": 0.11865823056241911,
+      "alt_fell": true,
+      "moved_right": true,
+      "ang_toward_lean": true,
+      "GLIDE_LEAN": 0.52
+    }
+  },
+  {
+    "key": "G",
+    "name": "G hover-equilibrium",
+    "ok": true,
+    "detail": {
+      "m": 10500,
+      "g": 1.62,
+      "T": 66000,
+      "thr_hover": 0.25772727272727275,
+      "ay_hover": 0,
+      "ay_up": 0.3240000000000003,
+      "ay_down": -0.32399999999999984
+    }
+  },
+  {
+    "key": "H",
+    "name": "H fuel/mass",
+    "ok": true,
+    "detail": {
+      "burned": 1200,
+      "expected": 1200.0,
+      "fuel_ok": true,
+      "clamp_fuel": 0,
+      "clamp_ok": true,
+      "ay_empty": -9.81,
+      "noThrust_ok": true,
+      "accel_grows_as_fuel_burns": true
+    }
+  },
+  {
+    "key": "I",
+    "name": "I energy/drag",
+    "ok": true,
+    "detail": {
+      "aero_accel": [
+        -13.128411397984792,
+        21.308525764563967
+      ],
+      "aero_dot_v": -5165.540574382314,
+      "note": "dot<=0 means aero removes air-relative KE (lift is perp, so this is the drag sign)"
+    }
+  },
+  {
+    "key": "J",
+    "name": "J touchdown",
+    "ok": true,
+    "detail": {
+      "checks": {
+        "good_succeeds": true,
+        "hot_fails": true,
+        "drift_fails": true,
+        "tilt_fails": true,
+        "offpad_fails": true
+      },
+      "good": {
+        "ok": true,
+        "title": "JACKLYN HAS THE BOOSTER",
+        "lines": [
+          "Vertical speed  18.0 m/s",
+          "Drift           6.0 m/s",
+          "Tilt            1.1\u00b0",
+          "Offset          0.0 m",
+          "Fuel left       8000 kg"
+        ],
+        "hadResult": true
+      },
+      "hot": {
+        "ok": false,
+        "title": "RAPID UNSCHEDULED DISASSEMBLY",
+        "lines": [
+          "Came in too hot (40.0 m/s)"
+        ],
+        "hadResult": true
+      },
+      "drift": {
+        "ok": false,
+        "title": "RAPID UNSCHEDULED DISASSEMBLY",
+        "lines": [
+          "Too much sideways drift"
+        ],
+        "hadResult": true
+      },
+      "tilt": {
+        "ok": false,
+        "title": "RAPID UNSCHEDULED DISASSEMBLY",
+        "lines": [
+          "Tipped over \u2014 landed at 34\u00b0"
+        ],
+        "hadResult": true
+      },
+      "offpad": {
+        "ok": false,
+        "title": "SPLASHDOWN",
+        "lines": [
+          "Missed Jacklyn by 4956 m"
+        ],
+        "hadResult": true
+      }
+    }
+  },
+  {
+    "key": "K",
+    "name": "K time-step 30/60/120",
+    "ok": true,
+    "detail": {
+      "s30": {
+        "x": -4781.28,
+        "y": 7734.41,
+        "vx": 126.81,
+        "vy": -183.92,
+        "fuel": 55200,
+        "ang": -0.73
+      },
+      "s60": {
+        "x": -4779.88,
+        "y": 7733.87,
+        "vx": 126.87,
+        "vy": -184.0,
+        "fuel": 55200,
+        "ang": -0.74
+      },
+      "s120": {
+        "x": -4779.18,
+        "y": 7733.6,
+        "vx": 126.89,
+        "vy": -184.03,
+        "fuel": 55200,
+        "ang": -0.74
+      },
+      "pos_30_vs_120": 2.25,
+      "pos_60_vs_120": 0.75,
+      "vel_30_vs_120": 0.13,
+      "vel_60_vs_120": 0.04,
+      "fuel_spread": 0
+    }
+  }
+]

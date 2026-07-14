@@ -1761,10 +1761,40 @@ function wind(h) {
 }
 function rho(h) { return RHO0 * Math.exp(-Math.max(h, 0) / HSCALE); }
 
+// ---------- Physics conventions & helpers ----------
+// COORDINATE FRAME (see testing/PHYSICS_CONVENTIONS.md for the full trace):
+//   World: +x = RIGHT, +y = UP. Gravity pulls toward -y (ay = -G). Ground at y = 0.
+//   Attitude: ang = 0 means the NOSE points +y (straight up). ang is measured from +y toward +x,
+//     so a POSITIVE ang leans the nose toward +x (downrange/right). POSITIVE angv increases ang.
+//   Thrust: the engine is at the tail; the reaction pushes the vehicle along its NOSE axis, i.e.
+//     F_thrust = T·(sin ang, cos ang). During a retro-burn on a down-right, tail-first descent
+//     (ang in (-π/2,0)) this force is up-left, opposing velocity — physically correct.
+//   Screen: the y-flip (world-up → screen-down) lives ONLY in w2sY/curveOff. Physics never sees it.
+// Named direction helpers (pure; keep physics vectors in physics coords):
+function bodyNoseDirection(ang) { return { x: Math.sin(ang), y: Math.cos(ang) }; }   // +nose (ang=0 ⇒ +y up)
+function bodyTailDirection(ang) { return { x: -Math.sin(ang), y: -Math.cos(ang) }; } // engine/aft end
+// Thrust force direction on the vehicle. Engine gimbal is abstracted as a torque (see aacc), not a
+// lateral force, so on-axis thrust here is exactly along the nose — the `gimbal` arg is reserved for
+// documentation/future use and does not deflect the force vector in this arcade model.
+function thrustDirection(ang, gimbal) { return bodyNoseDirection(ang); }
+// Shortest signed angular error target-current, wrapped to (-π, π]. Use for any attitude spring so
+// control error never jumps a full turn at the ±π seam.
+function shortestAngleDifference(target, current) {
+  let d = target - current;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+// Frame-rate-INVARIANT first-order smoothing factor for x += (target-x)*smoothK(k,dt): the fraction
+// of the remaining gap to close this step so the time constant 1/k is identical at any frame rate.
+// (The old min(1,dt·k) form drifted ~1-2% across 30-120 fps; this closed-form removes that.)
+function smoothK(k, dt) { return 1 - Math.exp(-k * dt); }
+
 // ---------- Physics (shared by game + trajectory prediction) ----------
-// s: {x,y,vx,vy,ang,angv,fuel}; thr 0..1; tq -1..1; fin = smoothed deflection
-function stepPhysics(s, dt, thr, tq, fin) {
-  const finD = fin === undefined ? tq : fin;
+// s: {x,y,vx,vy,ang,angv,fuel}; thr 0..1; tq -1..1.
+// (There is no `fin` force term — steering authority is driven entirely by tq, see the rotation
+// block below. The smoothed b.fin value is used only by the renderer + trajectory predictor.)
+function stepPhysics(s, dt, thr, tq) {
   const m = DRY_MASS + s.fuel;
   let ax = 0, ay = -G;
 
@@ -1899,8 +1929,7 @@ function stepPhysics(s, dt, thr, tq, fin) {
       // toward whichever side the deck is on so the glide always carries toward Jacklyn.
       const deckSide = (deckX() >= s.x) ? 1 : -1;
       const targetAng = GLIDE_LEAN * deckSide;
-      let dA = targetAng - s.ang;
-      while (dA > Math.PI) dA -= 2 * Math.PI; while (dA < -Math.PI) dA += 2 * Math.PI;
+      const dA = shortestAngleDifference(targetAng, s.ang);   // shortest-arc error (no ±π-seam jump)
       aacc += GLIDE_TRIM_K * dA * atmoT;               // attitude spring (rate damping handled above)
     } else {
       // vertical weathercock (unchanged from the amazing build): trim the body toward flow-alignment.
@@ -1953,7 +1982,9 @@ function stepPhysics(s, dt, thr, tq, fin) {
 
 // ---------- Trajectory prediction ----------
 function predictTrajectory() {
-  // carries your live rotation: spin hard and the predicted path swings with you
+  // Carries your live ATTITUDE + rotation (s.ang, s.angv) so tilting swings the path; it does NOT
+  // apply held ArrowLeft/Right steering torque (that would make the ✕ jitter on taps) — the forecast
+  // is a "hold this attitude + throttle" read, not a "keep steering" read.
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: b.angv, fuel: b.fuel };
   const thrRaw = b.thr > 0.05 ? b.thr : 0;
   // The ✕ answers "where do I actually go if I HOLD what I'm doing right now?" — so it must include
@@ -1965,7 +1996,6 @@ function predictTrajectory() {
   // is merely coasting (thr≈0) the forecast is naturally ballistic already, so the useful
   // "where do I fall if I cut" read is preserved without special-casing it.
   const thr = thrRaw;
-  const heldFin = SHIP_MODE ? 0 : ((scene === 'flying' || scene === 'paused') && b.fin) || 0;
   const pts = [];
   // The line answers: "where do I land if I HOLD what I'm doing right now?"
   // Ship mode: pilot holds attitude, then flies a standard landing flip below
@@ -1974,12 +2004,12 @@ function predictTrajectory() {
   // (stepPhysics owns the attitude integration now, so there is no manual
   // angle/angv override here — the removed mAng/mAngv/momW were dead.)
   for (let i = 0; i < 420; i++) {
-    // stepPhysics ALREADY applies the weathercock, strake lift, and fin deflection to the state
-    // (including s.ang and s.angv). So we NO LONGER manually override s.ang here — that was
-    // causing the predictor to snap to vertical while the real vehicle holds ~15-25° AoA from
-    // the strakes, making the ✕ drift. Now the predicted path uses the SAME physics as the real
-    // vehicle, so the ✕ is accurate: where you'll actually land if you hold this attitude + fin.
-    stepPhysics(s, 0.3, thr, 0, heldFin);
+    // stepPhysics ALREADY applies the weathercock and strake lift to the state (including s.ang and
+    // s.angv). So we NO LONGER manually override s.ang here — that was causing the predictor to snap
+    // to vertical while the real vehicle holds ~15-25° AoA from the strakes, making the ✕ drift. Now
+    // the predicted path uses the SAME physics as the real vehicle, so the ✕ is accurate: where
+    // you'll actually land if you hold this attitude. (tq=0: forecast holds attitude, doesn't steer.)
+    stepPhysics(s, 0.3, thr, 0);
     pts.push({ x: s.x, y: s.y });
     if (s.y <= 0) break;
     // Stop at the apex of arrest ONLY in the terminal LANDING regime (low): there, "where would I
@@ -2722,29 +2752,42 @@ function update(dt) {
   // lost inside stepPhysics (fins/gimbal still work).
   if (tq && b.rcsFuel > 0) b.rcsFuel = Math.max(0, b.rcsFuel - RCS_BURN * Math.abs(tq) * dt);
   // fin deflection eases in and out so the steering (and the line) sweep
-  // smoothly — quick to engage, gentle to release
-  b.fin += (tq - b.fin) * Math.min(1, dt * (tq !== 0 ? 4 : 1.8));
+  // smoothly — quick to engage, gentle to release. smoothK() gives a frame-rate-INVARIANT
+  // exponential factor (1-e^-k·dt): same time constant at 30/60/120 fps (min(1,dt·k) drifted ~1-2%).
+  b.fin += (tq - b.fin) * smoothK(tq !== 0 ? 4 : 1.8, dt);
   if (Math.abs(b.fin) < 0.02 && !tq) b.fin = 0;
   // During the opening, the script commands GS1's throttle (openThr: full while FIRING, 0 after
-  // MECO). Once control hands off, the player's burn key takes over.
+  // MECO). Once control hands off, the player's burn key takes over. Frame-rate-invariant ramp
+  // (b.thr feeds the gimbal-authority term thr·1.3, so a frame-dependent ramp made attitude diverge).
   const burn = !locked && (keys[' '] || keys['ArrowUp'] || burnHeld);
   const thrCmd = locked ? openThr : (burn ? 1 : 0);
-  b.thr += (thrCmd - b.thr) * Math.min(1, dt * 8);
+  b.thr += (thrCmd - b.thr) * smoothK(8, dt);
   if (b.thr < 0.02 && !burn && !locked) b.thr = 0;
 
   // turbulence buffets the booster at high dynamic pressure — keep trimming!
-  // (none out in space: the buffet fades in with the atmosphere)
-  const qbarT = 0.5 * rho(b.y) * (b.vx * b.vx + b.vy * b.vy);
-  const qn = Math.min(1, qbarT / 18000) * Math.min(1, Math.max(0, (ENTRY_Y + 2500 - b.y) / 2200));
-  const turb = Math.sin(b.t * 1.9) + 0.6 * Math.sin(b.t * 4.3 + 2.0);
-  b.angv += turb * 0.22 * qn * dt;
+  // (none out in space: the buffet fades in with the atmosphere.) The kick is applied INSIDE the
+  // substep loop below (integrated at sdt, sampled at each substep's time) so the buffet is
+  // frame-rate-independent like every other force — it used to run once per frame at the full dt,
+  // which made 30/60/120 Hz diverge in the buffet band. b.t was advanced by the full dt at the top
+  // of update(), so this frame spans [tFrame0, b.t]; we sample turb across that span per substep.
+  const tFrame0 = b.t - dt;
 
   // substep for stability (capped so a high manual warp in the atmosphere can't
   // freeze the loop — physics gets coarse up there, but burn/RCS drops warp to ×1)
   const steps = Math.min(400, Math.max(1, Math.ceil(dt / (1 / 120))));
   const sdt = dt / steps;
   for (let i = 0; i < steps; i++) {
-    lastHeat = stepPhysics(b, sdt, b.thr, tq, b.fin);
+    lastHeat = stepPhysics(b, sdt, b.thr, tq);
+    // turbulence buffet — integrated per substep (frame-rate-independent). qn recomputed from the
+    // evolving state; turb sampled at this substep's time so the delivered angular impulse matches
+    // the continuous integral regardless of frame rate.
+    const qbarT = 0.5 * rho(b.y) * (b.vx * b.vx + b.vy * b.vy);
+    const qn = Math.min(1, qbarT / 18000) * Math.min(1, Math.max(0, (ENTRY_Y + 2500 - b.y) / 2200));
+    if (qn > 0) {
+      const tSub = tFrame0 + (i + 1) * sdt;
+      const turb = Math.sin(tSub * 1.9) + 0.6 * Math.sin(tSub * 4.3 + 2.0);
+      b.angv += turb * 0.22 * qn * sdt;
+    }
     // heat damage
     if (lastHeat.q3 > lastHeat.tol) {
       b.damage += (lastHeat.q3 - lastHeat.tol) / HEAT_DMG_DIV * sdt;
@@ -3858,8 +3901,12 @@ function drawReentryGuide() {
   let corr = 0;
   try {
     const pts = predictTrajectory();
-    if (pts && pts.length) {
-      const miss = deckX() - pts[pts.length - 1].x;    // + = projected landing SHORT / left of deck
+    const last = pts && pts.length ? pts[pts.length - 1] : null;
+    // Only bias off a GROUNDED forecast endpoint (mirror the glide director's guard): if the 420-step
+    // horizon runs out while still airborne, last.x is a mid-air point, not a landing — don't steer to
+    // it; stay purely retrograde until a real touchdown point exists.
+    if (last && last.y <= 50) {
+      const miss = deckX() - last.x;    // + = projected landing SHORT / left of deck
       // sign: leaning the nose toward +x (downrange) points thrust to push the path downrange.
       corr = Math.max(-REENTRY_CORR_MAX, Math.min(REENTRY_CORR_MAX, miss * REENTRY_CORR_K));
     }
