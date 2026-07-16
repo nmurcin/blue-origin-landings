@@ -78,3 +78,42 @@ scene, the timeline, and the bottom-right panel; it's HUD-space (screen px), cam
   with honest numbers (cross-speed |b.vx|, descent vs corridor, downrange to pad).
 - `drawMK1DistanceIndicator()`: off-screen pad pointer now shows CLOSING/DRIFTING-AWAY (green/amber) off vx.
 - All numbers MATCH evalTouchdown's `sf=1` for mars (raw physics velocity) — the HUD never lies about the gate.
+
+### to orchestrator / A1 (from A5) — one mars-gated line added to newRun's SHARED cam init (FYI, non-conflicting)
+
+I added ONE line to the shared post-branch camera init in `newRun` (right after `cam.x=b.x; cam.y=b.y*0.62; cam.s=H/30000;`, ~L1795), NOT inside A1's mars spawn block (1702-1713):
+`if (mode === 'mars') snapGroundCam();`
+It makes MK1 open already framed by my cinematic camera (no zoom-in lerp on the first frames). It only fires for mars, so ocean/tower/moon inits are byte-for-byte unchanged. If A1 also edits this tail, the orchestrator can keep both — they don't collide.
+
+### to A4 (from A5) — shake hook is LIVE for the hoverslam
+
+My mars `updateCam` honors the existing global `shakeT` (same convention as ocean/tower/moon) — if you set `shakeT` on touchdown/crash/hard-landing, the mars camera rattles proportionally (kick scales `1/cam.s` so it reads the same at any zoom). No new hook needed; just `shakeT = <secs>` in your evalTouchdown mars path and the camera does the rest. Suggested: a short punchy `shakeT = Math.max(shakeT, 0.25)` on a hard-but-survivable touchdown, more on a crash.
+
+### A5 summary — what I changed (mars mode ONLY)
+
+- **Camera** (`updateCam`/`snapGroundCam`/new `marsCamTarget()`): added a dedicated `mode==='mars'` branch
+  (previously MK1 fell through to the ocean/tower deck-framing path — lander was a tiny edge-jammed speck).
+  New broadcast-style framing, altitude-keyed, three eased phases (no hard cuts, the lerp smooths):
+  BRAKE/COAST (high) → wide enough to read the approach arc + pad direction, lander stays prominent;
+  PITCH-OVER (mid) → tighten + lead harder toward the pad (x=0);
+  HOVERSLAM (terminal) → zoom in on pad+lander, camera center CAPPED near the ground so the lunar surface,
+  A3's beacon, and A3's regolith dust fill the lower frame with the lander riding upper-middle. Horizontal
+  lead toward the pad (`padBias` 16%→78%) + a small velocity lead, clamped so the lander never leaves frame.
+  Camera only reads state + sets cam.x/y/s (never draws). Warp-scaled follow so it keeps pace under warp.
+  New constant `MK1_PAD_X = 0` (== deckX() for mars). Verified in testing/frames/a5_over_pad_{600,220,60}.png.
+- **Audio** (`update()` `if(AC)` block, new `mode==='mars'` path; every node access guarded, AC-null-safe):
+  BE-7 lander character — a NON-LINEAR engine-gain curve so A1's min-throttle floor (0.25) is an audible
+  IDLE RUMBLE (~0.11) while a firewall clearly ROARS (~0.34), with a ~35 ms responsive ear-slew. **NO WIND**
+  in vacuum: `windGain` hard-zeroed for mars (not relying on rho()=0 arithmetic). **RCS** = crisp attitude
+  puffs (~6 ms attack / ~50 ms release, gated on |b.tqIn|>0.2 + a live RCS bank). Non-mars audio (ocean/tower
+  + moon MK2 descent) is byte-for-byte the old behavior, just moved into an `else` and node-guarded.
+- **Warp/controls** (mars-only): capped the MK1 warp ladder at `MK1_WARP_MAX_IDX = 7` (×160) in both
+  `warpStep` (mobile) and the X key (desktop) — the full ×5120 ladder would overshoot the pad in one frame
+  on the ~30-40 s Apollo coast. The frame() warp gate already snaps warp back to ×1 the instant you burn or
+  steer (floorIdx=0 for mars), so the active landing is always real-time — I left that intact. Raw input
+  mapping (burn→thrCmd, steer→tqIn) left untouched: it's clean and the throttle spool/min-floor is A1's
+  physics, not mine.
+- Green gate PASS; mars runtime line: `errs=0 warns=0 nan_draw=0 ctx_unbal=0 ctx_underflow=0 landed=True`.
+- Added a testing-only helper `testing/a5_cam_probe.py` (positions the lander over the pad at a chosen alt
+  to verify terminal framing — a ballistic `--alt` drop stays 15 km downrange and can't show it). Not part
+  of the game; does not affect the gate.

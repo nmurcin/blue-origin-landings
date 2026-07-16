@@ -828,6 +828,11 @@ const MK1_MIN_THROTTLE = 0.25;   // BE-7 can't idle below ~25% — once lit, thr
 const MK1_THROTTLE_RATE = 5.5;   // engine spool time-const (1/s): slower than the shared k=8 so the
                                  // throttle has weight — no instant-on/off. ~0.4 s to ~90% of a step.
 const MK1_IGNITE_EPS = 0.02;     // thr above this + burn held ⇒ engine is "lit" ⇒ the floor applies
+// MK1 warp ladder cap (mars input/pacing, owned by A5): the Apollo coast is ~30-40 s of falling, so
+// the full WARP_STEPS ladder (up to ×5120) would overshoot the pad in a single frame. Cap the MK1
+// fast-forward at WARP_STEPS[7] = ×160 — enough to skip the dead coast, controllable near the pad.
+// The gate still snaps warp back to ×1 the instant you burn/steer, so the live landing is real-time.
+const MK1_WARP_MAX_IDX = 7;      // WARP_STEPS[7] === 160
 // ---------- MK1 regolith dust-kick (mars-only visual; owned by A3) ----------
 // The BE-7 plume blasts lunar dust off the surface on terminal descent. NO atmosphere ⇒ the grains
 // fly in straight BALLISTIC arcs (radially outward + up), then fall under 1/6 g — never billowing
@@ -1257,7 +1262,10 @@ function cycleViewMobile() {
 // FAST-FORWARD stepper: + climbs the warp ladder, − steps back toward ×1.
 // All modes now use the warp ladder (important for MK1's longer Apollo descent).
 function warpStep(dir) {
-  if (mode === 'moon' || mode === 'mars') warpIdx = Math.max(0, Math.min(WARP_STEPS.length - 1, warpIdx + dir));
+  // MK1 (mars) caps the ladder at ×160 for the Apollo coast (see MK1_WARP_MAX_IDX); moon uses the full
+  // ladder. Both snap back to ×1 on burn/steer via the frame() gate.
+  const topIdx = (mode === 'mars') ? MK1_WARP_MAX_IDX : WARP_STEPS.length - 1;
+  if (mode === 'moon' || mode === 'mars') warpIdx = Math.max(0, Math.min(topIdx, warpIdx + dir));
   else timeScale = dir > 0 ? 2 : 1;   // NG boosters: simple 2× toggle (descent is short)
 }
 // the steering dot: drag it, it follows your thumb; release and it springs home to center.
@@ -1786,6 +1794,7 @@ function newRun(m) {
   // R started the fresh run fast-forwarded). timeScale covers ocean/tower; warpIdx covers mars/moon.
   result = null; particles = []; armClose = 0; armY = ARM_Y; shakeT = 0; timeScale = 1; warpIdx = 0;
   cam.x = b.x; cam.y = b.y * 0.62; cam.s = H / 30000;
+  if (mode === 'mars') snapGroundCam();   // MK1: open already framed by the cinematic camera (no zoom-in lerp on the first frames)
   scene = 'flying';
 }
 // Opening-sequence timing (seconds): FIRING → MECO → coast → SEP → GS2 ignite → HANDOFF.
@@ -2895,17 +2904,49 @@ function update(dt) {
   }
   if (inOrbitalPhase()) { updateParticles(dt); return; }   // just handed off to orbit
 
-  // audio — vacuum is silent: the wind only fades in through the entry interface
+  // audio — vacuum is silent: the wind only fades in through the entry interface.
+  // Every node access is guarded (AC/engineGain/windGain/rcsGain can be null if audio never
+  // unlocked — headless runtime scan). The mars (BE-7 lunar) path is a distinct character.
   if (AC) {
-    // The compact BE-7 lander (Blue Moon MK1/MK2 descent) runs a quieter, less thunderous engine
-    // than the big methalox BE-4 booster — soften its gain a touch for character.
-    const engK = (mode === 'mars' || (mode === 'moon' && b.phase === 'lunardesc')) ? 0.34 : 0.55;
-    engineGain.gain.value = b.thr * engK;
-    const qbar = 0.5 * rho(b.y) * lastHeat.spd * lastHeat.spd;
-    const atmoRamp = Math.min(1, Math.max(0, (ENTRY_Y + 2500 - b.y) / 2200));
-    windGain.gain.value = Math.min(0.30, qbar / 26000 * 0.30) * atmoRamp;
-    const rcsOn = Math.abs(b.tqIn) > 0.2 && (b.y > ENTRY_Y + 1500 || qbar < 2500);
-    rcsGain.gain.setTargetAtTime(rcsOn ? 0.16 : 0, AC.currentTime, 0.025);
+    if (mode === 'mars') {
+      // BLUE MOON MK1 — the BE-7 is a small methalox lander engine: quieter + less thunderous than
+      // the BE-4 booster, with a distinct character. Two things sell it:
+      //  1) A non-linear gain curve so the min-throttle floor (A1's 0.25) is an audible IDLE RUMBLE
+      //     rather than near-silence, while a firewall clearly ROARS. We map the LIT throttle band
+      //     [0.25..1] onto a gain range [idle..full] with a slight power curve for punch.
+      //  2) A fast, responsive setTargetAtTime slew (short tau) so throttle-up/down FEELS immediate
+      //     even though the physics spool (A1) is deliberately slow — the ear leads the eye a touch.
+      if (engineGain) {
+        const lit = b.thr > MK1_IGNITE_EPS;
+        let g = 0;
+        if (lit) {
+          // remap [MK1_MIN_THROTTLE..1] -> [0..1], curve it, then into an audible band [idle..full]
+          const f = Math.min(1, Math.max(0, (b.thr - MK1_MIN_THROTTLE) / (1 - MK1_MIN_THROTTLE)));
+          const idle = 0.11, full = 0.34;                 // BE-7 band: firm idle rumble -> restrained roar
+          g = idle + (full - idle) * Math.pow(f, 0.72);
+        }
+        engineGain.gain.setTargetAtTime(g, AC.currentTime, 0.035);   // responsive ~35 ms ear-slew
+      }
+      // NO ATMOSPHERE on the Moon => NO wind. Hard-silence it (don't rely on rho()=0 arithmetic).
+      if (windGain) windGain.gain.value = 0;
+      // RCS: crisp attitude puffs. In vacuum you'd "feel" them as sharp pulses, so gate hard on the
+      // raw steering input and bank fuel, with a very short attack/decay for a punchy tick — not a
+      // sustained hiss. Silent once the RCS bank is dry (couple is lost in stepPhysics too).
+      if (rcsGain) {
+        const rcsOn = Math.abs(b.tqIn) > 0.2 && (b.rcsFuel === undefined || b.rcsFuel > 0);
+        rcsGain.gain.setTargetAtTime(rcsOn ? 0.20 : 0, AC.currentTime, rcsOn ? 0.006 : 0.05);
+      }
+    } else {
+      // The compact BE-7 lander on the MK2 lunar descent (moon mode) also runs quieter; other modes
+      // (ocean/tower NG boosters) keep the thunderous BE-4 gain + atmospheric wind.
+      const engK = (mode === 'moon' && b.phase === 'lunardesc') ? 0.34 : 0.55;
+      if (engineGain) engineGain.gain.value = b.thr * engK;
+      const qbar = 0.5 * rho(b.y) * lastHeat.spd * lastHeat.spd;
+      const atmoRamp = Math.min(1, Math.max(0, (ENTRY_Y + 2500 - b.y) / 2200));
+      if (windGain) windGain.gain.value = Math.min(0.30, qbar / 26000 * 0.30) * atmoRamp;
+      const rcsOn = Math.abs(b.tqIn) > 0.2 && (b.y > ENTRY_Y + 1500 || qbar < 2500);
+      if (rcsGain) rcsGain.gain.setTargetAtTime(rcsOn ? 0.16 : 0, AC.currentTime, 0.025);
+    }
   }
   // glowing embers shed during the hottest part of reentry
   if (b.heatFrac > 0.5 && Math.random() < 0.5) {
@@ -3002,10 +3043,80 @@ function moonCamTarget() {
   }
   return { x: tx, y: ty, s };
 }
-function snapGroundCam() { const t = moonCamTarget(); cam.x = t.x; cam.y = t.y; cam.s = t.s; }
+// ---------- MK1 (Blue Moon lunar) cinematic camera (mars mode ONLY) ----------
+// A broadcast-style framing of a real Moon landing. Three eased phases, all keyed off altitude so
+// there are no hard cuts — the lerp in updateCam smooths the rest:
+//   BRAKE/COAST (high): zoom out enough to read the whole approach arc, keep the lander prominent
+//     (never a tiny corner dot), and LEAD toward the pad at x=0 so the player sees where she's going.
+//   PITCH-OVER (mid): tighten in, lead harder toward the pad so the beacon + lander share the frame.
+//   HOVERSLAM (terminal): zoom right in on the pad-and-lander, framed with HEADROOM BELOW the lander
+//     so the surface + A3's regolith dust-kick + the target beacon are all visible for the touchdown.
+// The pad (A3's target beacon) is world x=0; the surface is y=0. Camera only reads state + returns a
+// target {x,y,s}; it never draws. AC-null / headless safe (no audio touched here).
+const MK1_PAD_X = 0;                 // landing site / beacon world x (== deckX() for mars)
+function marsCamTarget() {
+  const alt = Math.max(0, b.y);
+  const dxPad = b.x - MK1_PAD_X;     // how far RIGHT of the pad she still is (spawn ~+16 km)
+  // --- ZOOM: vertical world-span the frame should cover, by altitude. Bounded both ways so the
+  // lander is never a speck (high) nor over-zoomed at the deck (low). Broadcast telephoto feel.
+  //   high (~6 km): span ~4.2 km  -> lander readable, arc + pad direction visible
+  //   terminal (<300 m): span ~ 2.2*alt + 260 m -> tight, lander ~upper third, surface below in view
+  const wideSpan = Math.min(4600, alt * 0.72 + 260);   // brake/coast envelope
+  const tightSpan = alt * 2.2 + 260;                   // terminal hoverslam envelope (headroom below)
+  // blend from wide->tight as she drops through the last ~1.8 km (the pitch-over + hoverslam window)
+  const tf = Math.min(1, Math.max(0, (1800 - alt) / 1800));
+  const span = wideSpan * (1 - tf) + tightSpan * tf;
+  const s = H / Math.max(220, span);
+  // --- HORIZONTAL: lead toward the pad. High up we sit mostly on the lander but bias toward the pad
+  // so its direction is on-screen; as she nears the surface we slide the center toward the pad so the
+  // lander AND the beacon at x=0 both sit in frame for the precision touchdown read. Also add a small
+  // velocity lead so a fast cross-range approach isn't chasing the lander off the edge.
+  const halfW = (W / s) / 2;
+  const padBias = 0.16 + 0.62 * tf;                    // 16% toward pad high -> up to 78% low
+  let tx = b.x - dxPad * padBias;
+  const velLead = Math.max(-halfW * 0.30, Math.min(halfW * 0.30, b.vx * 1.6));
+  tx += velLead;
+  // Never let the lander leave the frame: clamp the center so the ship stays inside 80% of the half-width.
+  const maxOff = halfW * 0.80;
+  if (b.x - tx > maxOff) tx = b.x - maxOff;
+  else if (tx - b.x > maxOff) tx = b.x + maxOff;
+  // --- VERTICAL: frame the lander in the UPPER portion so the surface + dust-kick show below her.
+  // High up, keep her a bit above center (the approach arc reads above). As she nears the surface,
+  // the camera center is CAPPED near the ground (y=0 at ~90% down the frame) so the lunar surface,
+  // A3's target beacon, and the regolith dust-kick fill the lower frame — a broadcast "coming in to
+  // land" shot with the lander riding the upper-middle. The lander stays visible because at low alt
+  // it's above the capped center; the horizontal clamp above keeps it inside the sides.
+  const airTy = alt + span * (0.20 + 0.14 * tf);       // "in the air" framing: ship above center
+  const groundTy = span * 0.40;                        // "at the deck" framing: y=0 sits ~90% down the frame
+  const ty = airTy * (1 - tf) + groundTy * tf;         // blend toward the ground-anchored frame as she lands
+  return { x: tx, y: ty, s };
+}
+function snapGroundCam() {
+  const t = (mode === 'mars') ? marsCamTarget() : moonCamTarget();
+  cam.x = t.x; cam.y = t.y; cam.s = t.s;
+}
 
 function updateCam(dt) {
   if (!b) return;
+  // ---------- BLUE MOON MK1 cinematic chase (mars mode ONLY) ----------
+  if (mode === 'mars') {
+    const t = marsCamTarget();
+    // Ease toward the target. Warp races the world forward (b.x can jump km/frame on the coast) so
+    // scale the follow by the effective warp — smooth at ×1, snap-follow under warp so she never lags
+    // out of frame. Terminal descent is always ×1 (warp gate drops it), so the landing is buttery.
+    const camWarp = Math.max(1, (warpIdx > 0 && WARP_STEPS[warpIdx]) || 1);
+    const k = Math.min(1, dt * camWarp * 2.6);
+    cam.x += (t.x - cam.x) * k;
+    cam.y += (t.y - cam.y) * k;
+    cam.s += (t.s - cam.s) * k;
+    // A4's landing juice (crash/touchdown) drives shakeT; honor it here so the hoverslam can rattle.
+    if (shakeT > 0) {
+      shakeT -= dt;
+      const m = Math.min(1, shakeT * 3) * 7 / cam.s;
+      cam.x += (Math.random() - 0.5) * m; cam.y += (Math.random() - 0.5) * m;
+    }
+    return;
+  }
   // AROUND THE MOON: one camera for the whole flight — the ascent camera also
   // drives the orbital STANDARD view. In the ORBIT/EARTH map zooms the cam is
   // frozen (the map has its own projection) and snapped back on return to STANDARD.
@@ -7203,7 +7314,10 @@ function handleKeyPress(k) {
   } else if (scene === 'flying') {
     if (k === 'p' || k === 'P') { scene = 'paused'; silenceFlightAudio(); }
     else if ((k === 'x' || k === 'X')) {
-      if (mode === 'moon' || mode === 'mars') warpIdx = Math.min(WARP_STEPS.length - 1, warpIdx + 1);   // warp UP one step (same ladder every stage; MK1 needs it for the long Apollo descent)
+      // warp UP one step. MK1 (mars) caps at ×160 (MK1_WARP_MAX_IDX) for the Apollo coast; moon uses
+      // the full ladder. Both snap to ×1 on burn/steer via the frame() gate.
+      const topIdx = (mode === 'mars') ? MK1_WARP_MAX_IDX : WARP_STEPS.length - 1;
+      if (mode === 'moon' || mode === 'mars') warpIdx = Math.min(topIdx, warpIdx + 1);
       else timeScale = timeScale > 1 ? 1 : 2;
     }
     else if (k === 'z' || k === 'Z') {
