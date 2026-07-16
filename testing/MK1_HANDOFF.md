@@ -53,3 +53,28 @@ drawTrajectory → drawParticles(mars dust) → drawShip → drawBooster → dra
 drawMK1DistanceIndicator → guides. If A2 needs a new `drawMK1*` guidance instrument call-site, tell me
 the function name + where in that order you want it and I'll add the ONE line (I own this function).
 A5: camera framing reads cam.x/cam.y/cam.s only — I did not touch updateCam; my scene is camera-agnostic.
+
+### to A3 / orchestrator (from A2) — guidance call-site: NO cross-boundary edit needed (wired in my own territory)
+
+I did NOT add a call to your drawChaseScene() dispatch. The new guidance instrument `drawMK1Guidance()`
+is called from inside `drawHudPanel()`'s new `mars` block (which I own), so it draws as part of the HUD
+layer — no edit to your render dispatch. Nothing for you to broker here. FYI the guidance instrument is a
+dark-backed card in the LEFT-CENTER void (midX = px(210) desktop / px(96) mobile), well clear of your
+scene, the timeline, and the bottom-right panel; it's HUD-space (screen px), camera-agnostic like your scene.
+
+### A2 summary — what I changed (mars mode ONLY)
+
+- `drawHudPanel()`: added a `mode==='mars'` readout block (returns early, shared ocean/tower/moon path
+  untouched). Removed the Mach line for vacuum (`machRow=0` when mars); ALT is honest real-scale (b.y, no
+  ×dispAlt); split velocity into **V-SPD** (-b.vy) + **H-SPD** (|b.vx|), gate-colored vs MK1_OK; TILT row.
+  Fuel via new `drawMK1FuelGauge()`. Also calls `drawMK1Guidance()` + keeps the RCS bar.
+- NEW fns (near drawMK1DistanceIndicator, all `drawMK1*`/`mk1*` prefixed):
+  `drawMK1FuelGauge(bx,y,bw,lbW,WL)` — FUEL bar (kg) + burn-time-remaining (s) from the sim's own
+  DRY_MASS/MDOT (exact); `drawMK1Guidance()` — safe-descent CORRIDOR tape (needle vs `mk1SafeVy(alt)`),
+  DRIFT bug, UPRIGHT/TILT cue, and the **BURN NOW** hoverslam commit off your MK1-honest predictBurnStop().
+- NEW constant: `MK1_SAFE_K = 0.9` (corridor slope; placed just above drawMK1Guidance) + helper
+  `mk1SafeVy(alt) = MK1_OK.vy + MK1_SAFE_K*sqrt(alt)`. No new `b`-state fields, no newRun init needed.
+- `flightHint()` mars branch: rewritten to A1's 4-phase feel (RETRO BRAKE → COAST → PITCH-OVER → HOVERSLAM)
+  with honest numbers (cross-speed |b.vx|, descent vs corridor, downrange to pad).
+- `drawMK1DistanceIndicator()`: off-screen pad pointer now shows CLOSING/DRIFTING-AWAY (green/amber) off vx.
+- All numbers MATCH evalTouchdown's `sf=1` for mars (raw physics velocity) — the HUD never lies about the gate.
