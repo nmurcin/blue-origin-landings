@@ -117,3 +117,42 @@ My mars `updateCam` honors the existing global `shakeT` (same convention as ocea
 - Added a testing-only helper `testing/a5_cam_probe.py` (positions the lander over the pad at a chosen alt
   to verify terminal framing — a ballistic `--alt` drop stays 15 km downrange and can't show it). Not part
   of the game; does not affect the gate.
+
+### to A1 (from A4) — I did NOT change the touchdown GATE; only scoring weights + the leaderboard ceiling
+
+I kept your envelope exactly: MK1_OK (vy<=3.5, vx<=2.5, |ang|<=6) and padHalf=30 are UNTOUCHED. The gate
+in evalTouchdown's mars path fires on the same tolerances you set — the physics still hits it. All I did was
+change what a *legal* touchdown SCORES (pillar-multiplied), so no re-tune is needed on your end.
+
+Two SHARED-line changes I made (flagging for your awareness, both mars-only in effect):
+- `SCORE_MAX.mars`: 2000 -> 4600. A PERFECT TOUCHDOWN now scores base 900 × (1+1.20+1.10+0.90+0.60) = 4320,
+  and the old 2000 ceiling silently BLOCKED any score >2000 from boarding (submitScore rejects > SCORE_MAX).
+  4600 gives headroom for a legit perfect. ocean/tower/moon ceilings untouched.
+- `landingSpec('mars').base`: 1200 -> 900 (now a FLOOR for a sloppy-but-legal landing; mk1Score multiplies
+  it). The mars fuelW/precPos/precVy fields are now LEGACY (the mars path calls mk1Score, not those weights)
+  — left in place only for object-shape parity with ocean/tower. Your `landingSpec` return SHAPE is unchanged.
+
+### A4 summary — what I changed (mars mode ONLY)
+
+- **Scoring model** (`mk1Score()`, new): score = base × (1 + prec + soft + fuel + combo), each pillar a
+  0..1 quality × its weight (MK1_W_PREC 1.20, MK1_W_SOFT 1.10, MK1_W_FUEL 0.90, MK1_W_COMBO 0.60). PRECISION
+  = 1 at bullseye→0 at pad edge; SOFTNESS = mean of (vy,vx,tilt) quality vs MK1_OK; FUEL = frac of FUEL0 left.
+  Verified in code: PERFECT=3574, GOOD=2467, ROUGH=1242 (a great landing dwarfs a sloppy one).
+- **Medals**: PRECISION (<=8 m off), FEATHER (contact speed hypot(vy,vx) <=1.5 m/s + upright), EFFICIENCY
+  (>=55% tank). All three = PERFECT TOUCHDOWN. Grades: PERFECT / FLAWLESS / GREAT / GOOD / ROUGH BUT DOWN.
+- **Bullseye rings**: BULLSEYE (<=5 m) / ON THE PAD (<=12 m) / PAD EDGE (<=30 m), shown on the scorecard.
+- **evalTouchdown mars path** now routes to `mk1EvalTouchdown()`; ocean/tower path byte-unchanged (early return).
+- **JUICE**: win = green screen-flash (`drawMK1Flash`) + `shakeT` + playChime/`mk1PerfectChime` (major-triad
+  arpeggio on perfect) + a hard contact regolith burst into your `mk1Dust` array (`mk1TouchdownDust`, add-only).
+  Crash = `mk1Crash`: red flash + hard `shakeT=0.7` + spawnExplosion + playExplosion + a wry per-failure line
+  (hot/drift/tip/miss) + failure telemetry. Uses A5's `shakeT` hook as offered.
+- **drawDone mars block**: grade banner + medal chips (`drawMK1Scorecard`), gated `mode==='mars' && ok &&
+  result.mk1`; grade-flavored sign-off + a "chase the other medals" replay hook.
+- NEW globals/fns/consts (all `MK1_`/`mk1` prefixed): `mk1FlashT`/`mk1FlashCol`, `mk1Score`, `clamp01`,
+  `mk1EvalTouchdown`, `mk1Crash`, `mk1PickCrashLine`, `MK1_CRASH_LINES`, `mk1PerfectChime`, `mk1TouchdownDust`,
+  `drawMK1Flash`, `drawMK1Scorecard`, `MK1_MEDAL_STYLE`, `MK1_RING_*`, `MK1_MEDAL_*`, `MK1_W_*`. Per-run state
+  lives on `result.mk1` (set after finish()) — NO new `b`-field, so NO newRun init line needed from you.
+- Testing-only `testing/a4_score_probe.py` (--preset perfect/good/rough/crash) drives the real evalTouchdown
+  mars path + screenshots the scorecard. Not part of the game; does not affect the gate.
+- Green gate PASS; mars runtime line: `errs=0 warns=0 nan_draw=0 ctx_unbal=0 ctx_underflow=0 landed=True`.
+  ui-scan `done-mars-win` clean. Screenshots: testing/frames/a4_done_{perfect,good,rough,crash}.png.

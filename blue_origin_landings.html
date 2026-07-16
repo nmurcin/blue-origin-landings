@@ -787,7 +787,11 @@ async function syncPilotFromSession() {
 //   ocean ceiling = 400 + 0.04·70000 + 350 = 3550 ; tower = 500 + 0.04·70000 + 410 = 3710
 //   mars  ceiling = 1200 + 0.05·3000 + 250 + 200 = 1800 (FUEL0=3000; full-fuel is physically
 //   impossible for a powered descent, so real max is well under this) ; moon = 2500+600+700+700+450 = 4950
-const SCORE_MAX = { ocean: 3600, tower: 4650, mars: 2000, moon: 5000 };
+// Per-mode leaderboard anti-cheat ceiling (submitScore rejects anything above it). mars raised to 4600
+// for the A4 pillar-scoring model: a PERFECT TOUCHDOWN (bullseye + feather + full tank) = base 900 ×
+// (1 + 1.20 + 1.10 + 0.90 + 0.60) = 4320, so 4600 gives headroom for a legit perfect while still
+// rejecting forged scores. (mars-only change; ocean/tower/moon ceilings untouched.)
+const SCORE_MAX = { ocean: 3600, tower: 4650, mars: 4600, moon: 5000 };
 // Offensive callsigns to reject — base words only; leetspeak is normalized.
 const BLOCKED_WORDS = ['nigger','nigga','chink','gook','spic','kike','wetback',
   'coon','beaner','paki','towelhead','sandnigger','darkie','jigaboo','faggot',
@@ -841,10 +845,86 @@ const MK1_DUST_ALT = 90;         // start kicking dust when b.y (plume) is under
 const MK1_DUST_G = 1.62;         // lunar gravity for the ballistic fall (matches mars G)
 let mk1Dust = [];                // {x,y,vx,vy,age,life,r} in WORLD metres
 let mk1DustLast = 0;             // performance.now() of the previous dust update (for dt)
+// ---------- MK1 (Blue Moon lunar) scoring, medals & juice (mars mode ONLY; owned by A4) ----------
+// The touchdown is scored on the three things a real lunar landing lives or dies by:
+//   PRECISION — how close to the bullseye at x=0 (the illuminated beacon A3 draws), within padHalf=30 m.
+//   SOFTNESS  — how gently she kisses the regolith: low vy AND low vx AND upright, all vs MK1_OK.
+//   EFFICIENCY— how much fuel is left. A clean descent leaves a fat reserve (A1: Δv~1298 vs ~450 needed);
+//               an over-braked, hover-heavy flight runs the tank down and the medal slips away.
+// The score MULTIPLIES these so a great landing dwarfs a sloppy one: base × (1 + prec + soft + fuel)
+// plus a combo kicker for nailing all three. Sloppy-but-legal ~ base; a bullseye feather ~ 4-5× base.
+// A2's HUD numbers use the raw physics velocity (sf=1) — the scorecard tells the SAME truth.
+//
+// Concentric scoring rings inside padHalf (metres from x=0):
+const MK1_RING_BULLSEYE = 5;     // dead-center — the beacon's core
+const MK1_RING_INNER    = 12;    // on the pad proper
+// (outside MK1_RING_INNER but <= padHalf is a legal-but-scruffy edge landing; > padHalf is a crash)
+// Medal thresholds — a landing earns a named medal per pillar when it clears the bar:
+const MK1_MEDAL_PRECISION = 8;   // PRECISION medal: touchdown within 8 m of dead-center
+const MK1_MEDAL_FEATHER   = 1.5; // FEATHER medal: total contact speed (hypot of vy,vx) at/under 1.5 m/s
+const MK1_MEDAL_EFFICIENCY_FRAC = 0.55;  // EFFICIENCY medal: land with >=55% of the tank still aboard
+// PERFECT TOUCHDOWN = all three medals at once (dead-center + feather-soft + fat reserve). The grail.
+// Score-shaping weights (fractions of base the pillar can add at its very best):
+const MK1_W_PREC = 1.20;         // a bullseye adds up to +120% of base
+const MK1_W_SOFT = 1.10;         // a feather-soft, upright kiss adds up to +110% of base
+const MK1_W_FUEL = 0.90;         // a full tank at touchdown adds up to +90% of base
+const MK1_W_COMBO = 0.60;        // hitting all three pillars near-max stacks a further +60% of base
+// grade() thresholds are keyed off the pillar quality sum q (0..1 each) — see mk1Score().
+// Compute the MK1 touchdown score + medals from the contact state. Pure fn: no side effects, no draws.
+//   off  = |x - 0|  (metres from bullseye)   vy = -b.vy (descent rate, m/s, >=0 at contact)
+//   vx   = |b.vx|   angDeg = |tilt|           fuel = kg remaining   spec = landingSpec('mars')
+// Returns { score, prec, soft, fuel, combo, medals[], grade, ring, breakdown }.
+function mk1Score(off, vy, vx, angDeg, fuel, spec) {
+  const OK = spec.ok, padHalf = spec.padHalf;
+  // --- pillar qualities, each normalized to 0..1 (1 = perfect) ---
+  // precision: 1 at dead-center, 0 at the pad edge (linear in miss distance).
+  const qPrec = clamp01(1 - off / padHalf);
+  // softness: blend of the three contact tolerances (descent, drift, tilt), each 1 when zero-error,
+  // 0 at its MK1_OK limit. Averaged so a hard hit on ANY axis pulls the softness score down.
+  const qVy = clamp01(1 - vy / OK.vy);
+  const qVx = clamp01(1 - vx / OK.vx);
+  const qAng = clamp01(1 - angDeg / OK.ang);
+  const qSoft = (qVy + qVx + qAng) / 3;
+  // efficiency: fraction of the original tank still aboard (FUEL0 is the mars tank, 2400 kg).
+  const qFuel = clamp01(fuel / (typeof FUEL0 === 'number' && FUEL0 > 0 ? FUEL0 : 2400));
+  // --- points: base scaled by the weighted pillars, plus a combo kicker for all-round excellence ---
+  const precPts = MK1_W_PREC * qPrec;
+  const softPts = MK1_W_SOFT * qSoft;
+  const fuelPts = MK1_W_FUEL * qFuel;
+  const combo = MK1_W_COMBO * (qPrec * qSoft * qFuel);   // product → only a truly all-round flight earns it
+  const score = spec.base * (1 + precPts + softPts + fuelPts + combo);
+  // --- medals (named mastery goals players chase) ---
+  const contactSpd = Math.hypot(vy, vx);   // total speed into the surface
+  const medals = [];
+  if (off <= MK1_MEDAL_PRECISION) medals.push('PRECISION');
+  if (contactSpd <= MK1_MEDAL_FEATHER && angDeg <= OK.ang) medals.push('FEATHER');
+  if (qFuel >= MK1_MEDAL_EFFICIENCY_FRAC) medals.push('EFFICIENCY');
+  const perfect = medals.length === 3;
+  // --- letter/word grade off the overall pillar quality (mean of the three, 0..1) ---
+  const q = (qPrec + qSoft + qFuel) / 3;
+  let grade;
+  if (perfect) grade = 'PERFECT TOUCHDOWN';
+  else if (q >= 0.80) grade = 'FLAWLESS';
+  else if (q >= 0.62) grade = 'GREAT LANDING';
+  else if (q >= 0.42) grade = 'GOOD LANDING';
+  else grade = 'ROUGH BUT DOWN';
+  const ring = off <= MK1_RING_BULLSEYE ? 'BULLSEYE' : off <= MK1_RING_INNER ? 'ON THE PAD' : 'PAD EDGE';
+  // per-pillar rounded points for the scorecard line
+  const bd = 'base ' + spec.base
+           + ' · precision +' + Math.round(spec.base * precPts)
+           + ' · softness +' + Math.round(spec.base * softPts)
+           + ' · fuel +' + Math.round(spec.base * fuelPts)
+           + (combo > 0.001 ? ' · combo +' + Math.round(spec.base * combo) : '');
+  return { score, qPrec, qSoft, qFuel, combo, medals, perfect, grade, ring, contactSpd, breakdown: bd };
+}
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 // Per-mode touchdown spec: OK window, target half-width, base/fuel/precision scoring weights.
 function landingSpec(m) {
   if (m === 'tower') return { ok: NG94_OK, padHalf: DECK_HALF_94, base: 500, fuelW: 0.04, precPos: 240, precVy: 170 };
-  if (m === 'mars')  return { ok: MK1_OK,  padHalf: 30,          base: 1200, fuelW: 0.05, precPos: 250, precVy: 200 };
+  // MK1 (mars): base is the FLOOR score for a legal-but-sloppy touchdown; mk1Score() multiplies it by
+  // the three pillars (precision/softness/fuel) so a bullseye feather lands ~4-5× base. fuelW/precPos/
+  // precVy are LEGACY here (evalTouchdown's mars path calls mk1Score instead) — left only for shape parity.
+  if (m === 'mars')  return { ok: MK1_OK,  padHalf: 30,          base: 900,  fuelW: 0.05, precPos: 250, precVy: 200 };
   return { ok: OCEAN_OK, padHalf: DECK_HALF, base: 400, fuelW: 0.04, precPos: 200, precVy: 150 };  // ocean / 7×2
 }
 
@@ -1584,6 +1664,10 @@ let particles = [];
 let armClose = 0;     // 0..1 chopstick closing animation
 let armY = ARM_Y;     // live carriage height — rides the rails to meet the booster
 let shakeT = 0;
+// MK1 (mars) outcome screen-flash — a full-screen color bloom on touchdown/crash, fades in ~0.5 s.
+// Set by A4's mk1EvalTouchdown/mk1Crash; drawn in the HUD layer by drawMK1Flash(). mars-only juice.
+let mk1FlashT = 0;              // seconds of flash remaining (counts down in frame())
+let mk1FlashCol = '160,220,200';  // "r,g,b" of the current flash (green=win, red=crash)
 let timeScale = 1;    // X toggles 2x fast-forward (auto-off below 3,500 m)
 let burnStopInfo = null;  // set by drawBurnStop, rendered in the HUD layer
 // Around-the-Moon orbital state. moonAngle advances on the Moon's circular
@@ -2394,6 +2478,12 @@ function evalTouchdown() {
   // booster speeds shown at the tier's display scale; mars (MK1 lunar) is already real-scale
   const sf = (mode === 'mars') ? 1 : T().dispSpd;
   const offForm = Math.abs(b.x - deckX());   // horizontal miss distance from the deck center
+  const spec = landingSpec(mode), OK = spec.ok, padHalf = spec.padHalf;
+  // ============================ MK1 (mars) — its own scored touchdown ============================
+  // A4 owns the whole mars branch: bullseye precision scoring, medals, a satisfying scorecard, and
+  // JUICE (screen flash + camera shake via shakeT + chime/dust on a win, gut-punch on a crash).
+  if (mode === 'mars') return mk1EvalTouchdown(vDeg, offForm, spec, OK, padHalf);
+  // ------------------------------ ocean / tower (unchanged) ------------------------------
   const lines = [
     'Vertical speed  ' + (-b.vy * sf).toFixed(1) + ' m/s',
     'Drift           ' + (Math.abs(b.vx) * sf).toFixed(1) + ' m/s',
@@ -2401,14 +2491,9 @@ function evalTouchdown() {
     'Offset          ' + offForm.toFixed(1) + ' m',
     'Fuel left       ' + Math.round(b.fuel) + ' kg'
   ];
-  const spec = landingSpec(mode), OK = spec.ok, padHalf = spec.padHalf;
   if (offForm > padHalf) {
-    if (mode === 'mars') {
-      crash(b.x, 2, 'Missed the pad by ' + Math.round(offForm - padHalf) + ' m — that\'s lunar regolith');
-    } else {
-      spawnSplash(b.x, 110); shakeT = 0.4;
-      finish(false, 'SPLASHDOWN', ['Missed Jacklyn by ' + Math.round(offForm - padHalf) + ' m'], 0);
-    }
+    spawnSplash(b.x, 110); shakeT = 0.4;
+    finish(false, 'SPLASHDOWN', ['Missed Jacklyn by ' + Math.round(offForm - padHalf) + ' m'], 0);
     return;
   }
   const ok = -b.vy <= OK.vy && Math.abs(b.vx) <= OK.vx && vDeg <= OK.ang;
@@ -2424,11 +2509,129 @@ function evalTouchdown() {
   const fuelPts = Math.round(b.fuel * spec.fuelW);
   const precPts = Math.round((1 - touchX / padHalf) * spec.precPos + (1 - touchVy / OK.vy) * spec.precVy);
   playClank();
-  const title = mode === 'mars' ? 'BLUE MOON MK1 IS ON THE MOON'
-              : mode === 'tower' ? 'JACKLYN HAS THE 9×4'
-              : 'JACKLYN HAS THE BOOSTER';
+  const title = mode === 'tower' ? 'JACKLYN HAS THE 9×4' : 'JACKLYN HAS THE BOOSTER';
   finish(true, title, lines, base + fuelPts + precPts,
          'base ' + base + ' · fuel ' + fuelPts + ' · precision ' + precPts);
+}
+
+// ---- MK1 (mars) touchdown evaluator: bullseye scoring, medals, scorecard, juice (A4-owned) ----
+// A wry line for a crash — picked by the failure mode so the gut-punch has personality.
+const MK1_CRASH_LINES = {
+  miss:  ['Touched down on open regolith — the pad was RIGHT THERE.',
+          'So close. The beacon was in frame and you drove past it.',
+          'Down safe... just not where anyone can reach her. Off the pad.'],
+  hot:   ['Came in hot and drove the legs through the deck.',
+          'Hoverslam a beat late — she arrived faster than the legs could take.',
+          'That was a lithobraking event, not a landing.'],
+  drift: ['Sideways drift snapped a landing leg on contact.',
+          'Crabbed in with too much lateral rate — over she went.',
+          'Set her down moving sideways. Legs don\'t like that.'],
+  tip:   ['Tipped past recovery — Blue Moon is now a lunar lawn ornament.',
+          'Came in leaning and kept right on leaning. Over she goes.',
+          'Attitude got away from you at the worst moment.']
+};
+function mk1PickCrashLine(kind) {
+  const arr = MK1_CRASH_LINES[kind] || MK1_CRASH_LINES.hot;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+// The gut-punch: explosion + hard shake + red screen-flash + explosion audio + a wry line + telemetry.
+function mk1Crash(kind, reason, vy, vx, angDeg, off) {
+  spawnExplosion(b.x, 2, 110);
+  shakeT = Math.max(shakeT, 0.7);          // A5's camera honors the global shakeT
+  mk1FlashT = 0.5; mk1FlashCol = '255,70,40';   // red failure flash (drawn in drawMK1Flash, HUD layer)
+  const lines = [
+    mk1PickCrashLine(kind),
+    '',
+    'Descent rate    ' + vy.toFixed(1) + ' m/s',
+    'Drift           ' + vx.toFixed(1) + ' m/s',
+    'Tilt            ' + angDeg.toFixed(1) + '°',
+    'Miss distance   ' + off.toFixed(1) + ' m'
+  ];
+  finish(false, 'HARD LUNAR IMPACT', lines, 0);   // finish() plays the explosion audio for a fail
+}
+function mk1EvalTouchdown(vDeg, offForm, spec, OK, padHalf) {
+  const vy = -b.vy, vx = Math.abs(b.vx);
+  // --- crash gates (missed pad / too hot / too much drift / tipped) ---
+  if (offForm > padHalf) {
+    mk1Crash('miss', 'off pad', vy, vx, vDeg, offForm);
+    return;
+  }
+  const hardVy = vy > OK.vy, hardVx = vx > OK.vx, hardAng = vDeg > OK.ang;
+  if (hardVy || hardVx || hardAng) {
+    const kind = hardVy ? 'hot' : hardVx ? 'drift' : 'tip';
+    mk1Crash(kind, 'gate', vy, vx, vDeg, offForm);
+    return;
+  }
+  // --- clean touchdown: freeze the state, then score it ---
+  const touchVy = vy, touchVx = vx, touchX = offForm, touchFuel = b.fuel;
+  b.vx = 0; b.vy = 0; b.y = 0; b.angv = 0;
+  const s = mk1Score(touchX, touchVy, touchVx, vDeg, touchFuel, spec);
+  // stash the rich scorecard data for drawDone's mars block (finish() sets `result`, we annotate it)
+  const card = {
+    off: touchX, vy: touchVy, vx: touchVx, ang: vDeg, fuel: touchFuel, contactSpd: s.contactSpd,
+    medals: s.medals, grade: s.grade, ring: s.ring, perfect: s.perfect
+  };
+  // telemetry lines (real-scale — no display multiplier for mars)
+  const lines = [
+    'Descent rate    ' + touchVy.toFixed(1) + ' m/s',
+    'Drift           ' + touchVx.toFixed(1) + ' m/s',
+    'Tilt            ' + vDeg.toFixed(1) + '°',
+    'Off-center      ' + touchX.toFixed(1) + ' m   (' + s.ring + ')',
+    'Fuel remaining  ' + Math.round(touchFuel) + ' kg'
+  ];
+  // --- WIN JUICE ---
+  playClank();                                    // the landing-leg contact clank
+  // a brighter flash + a punchier chime the better the landing; a triumphant double-chime on PERFECT
+  if (s.perfect) { mk1FlashT = 0.6; mk1FlashCol = '120,255,170'; shakeT = Math.max(shakeT, 0.32); mk1PerfectChime(); }
+  else if (s.grade === 'FLAWLESS') { mk1FlashT = 0.5; mk1FlashCol = '150,240,180'; shakeT = Math.max(shakeT, 0.26); playChime(); }
+  else { mk1FlashT = 0.4; mk1FlashCol = '160,220,200'; shakeT = Math.max(shakeT, 0.20); playChime(); }
+  // one last hard dust kick on contact so the touchdown blooms regolith (A3's mk1Dust system)
+  mk1TouchdownDust(b.x);
+  const title = s.perfect ? 'PERFECT TOUCHDOWN' : 'BLUE MOON MK1 IS ON THE MOON';
+  finish(true, title, lines, s.score, s.breakdown);
+  if (result) result.mk1 = card;   // drawDone reads result.mk1 for the medal/grade scorecard
+}
+// A triumphant major-triad arpeggio for a PERFECT touchdown — richer than the standard playChime().
+// AC-null / muted guarded (same convention as playChime). mars win juice only.
+function mk1PerfectChime() {
+  if (!AC || muted) return;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {   // C5 E5 G5 C6 — a rising major arpeggio
+    const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    const g = AC.createGain();
+    const t = AC.currentTime + i * 0.11;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t + 1.0);
+  });
+}
+// A hard contact burst of regolith grains injected into A3's mk1Dust array (add-only cosmetic).
+// The lander freezes at touchdown (scene='done'), so drawMK1Dust's own spawn loop stops firing — this
+// seeds the "bloom" that A3's per-frame update+render then animates + fades. Grain shape matches A3's.
+function mk1TouchdownDust(gx) {
+  if (mode !== 'mars') return;
+  if (mk1Dust === undefined) mk1Dust = [];
+  const n = 34;
+  for (let i = 0; i < n && mk1Dust.length < 260; i++) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const spd = 22 + Math.random() * 60;                      // a strong outward blast on contact
+    const ang = (10 + Math.random() * 40) * Math.PI / 180;    // low, near-horizontal ejecta (airless look)
+    mk1Dust.push({
+      x: gx + side * (0.3 + Math.random() * 1.4), y: 0.3 + Math.random() * 1.0,
+      vx: side * Math.cos(ang) * spd, vy: Math.sin(ang) * spd * (0.5 + Math.random() * 0.6),
+      age: 0, life: 1.0 + Math.random() * 1.8, r: 0.6 + Math.random() * 1.6
+    });
+  }
+}
+// The MK1 outcome screen-flash — a soft full-screen color bloom that fades out (win=green, crash=red).
+// Drawn in the HUD layer (screen space, camera-agnostic). mars-only; no-op otherwise.
+function drawMK1Flash() {
+  if (mode !== 'mars' || mk1FlashT <= 0) return;
+  const a = Math.min(0.5, mk1FlashT) * 0.7;   // peak ~0.35 alpha, eases to 0
+  ctx.save();
+  ctx.fillStyle = 'rgba(' + mk1FlashCol + ',' + a.toFixed(3) + ')';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
 }
 
 // (Removed: catchMissReason() and evalCatch() — the chopstick-catch evaluator and its failure
@@ -7178,7 +7381,10 @@ function drawDone() {
   // Size the panel to the ACTUAL (wrapped) line count.
   let bodyLines = result.lines;
   if (!ok) { bodyLines = []; for (const l of result.lines) bodyLines.push(...wrapText(l, pw - px(40), 14)); }
-  panel(pcx - pw / 2, py0, pw, px((touchUI ? (ok ? 272 : 168) : 230) + bodyLines.length * 22) + extra);
+  // MK1 (mars) win adds a grade banner + a row of medal chips above the telemetry — reserve its height.
+  const mk1Card = (mode === 'mars' && ok && result.mk1) ? result.mk1 : null;
+  const mk1Extra = mk1Card ? px(72) : 0;
+  panel(pcx - pw / 2, py0, pw, px((touchUI ? (ok ? 272 : 168) : 230) + bodyLines.length * 22) + extra + mk1Extra);
   let ts = 26;
   ctx.font = px(ts) + 'px "SF Mono", Menlo, monospace';
   while (ctx.measureText(result.title).width > pw - px(30) && ts > 15) {
@@ -7187,6 +7393,8 @@ function drawDone() {
   }
   hudText(result.title, pcx, py0 + px(46), ts, ok ? '#58d68d' : '#ff6b4a', 'center');
   let y = py0 + px(86);
+  // MK1 (mars) win: a grade banner + medal chips sit between the title and the telemetry.
+  if (mk1Card) y = drawMK1Scorecard(pcx, y, pw, mk1Card);
   if (ok) {
     ctx.font = px(14) + 'px "SF Mono", Menlo, monospace';
     let maxW = 0;
@@ -7210,7 +7418,15 @@ function drawDone() {
     } else if (mode === 'tower') {
       hudText('nice landing! ready to fly Blue Moon to the Moon? press M', pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
     } else if (mode === 'mars') {
-      hudText('the eagle has landed. well, the blue moon. nice work.', pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
+      // grade-flavored sign-off + a nudge toward the medals still unearned (the replay hook)
+      const line = mk1Card && mk1Card.perfect
+          ? 'DEAD CENTER, feather soft, tank to spare. That was a perfect run.'
+          : mk1Card && mk1Card.medals.length >= 2
+          ? 'the eagle has landed. well, the blue moon. beautiful flying.'
+          : mk1Card && mk1Card.medals.length === 1
+          ? 'down safe. now go chase the other two medals.'
+          : 'she\'s down in one piece. tighten it up — a bullseye is worth a lot more.';
+      hudText(line, pcx, y + px(4), 11, '#9fd8ff', 'center'); y += px(18);
     }
   }
   // 1v1 clap-back / encouragement when this run answered a challenge
@@ -7249,6 +7465,44 @@ function drawDone() {
     by += px(44) + px(4);
     if (shareFx.t > 0) hudText(shareFx.msg, pcx, by + px(12), 12, '#58d68d', 'center');
   }
+}
+
+// MK1 (mars) win scorecard: a colored GRADE banner + a centered row of earned-medal chips.
+// Returns the updated y cursor so drawDone continues the telemetry below it. mars-win only.
+const MK1_MEDAL_STYLE = {
+  PRECISION:  { col: '#5fd0ff', label: 'PRECISION' },   // dead-center bullseye
+  FEATHER:    { col: '#a9f0c8', label: 'FEATHER' },      // feather-soft contact
+  EFFICIENCY: { col: '#ffd166', label: 'EFFICIENCY' }    // fat fuel reserve
+};
+function drawMK1Scorecard(pcx, y, pw, card) {
+  // GRADE banner — perfect glows gold, otherwise a cool green→gray gradient by quality
+  const gCol = card.perfect ? '#ffd166' : card.grade === 'FLAWLESS' ? '#7fe6a6'
+             : card.grade === 'GREAT LANDING' ? '#8fe0c8' : card.grade === 'GOOD LANDING' ? '#a9c6d6' : '#c2b79a';
+  hudText(card.grade, pcx, y, 16, gCol, 'center');
+  y += px(26);
+  // MEDAL CHIPS — one pill per earned medal, centered as a row. No medals ⇒ a subtle "chase them" line.
+  const earned = (card.medals || []).map(m => MK1_MEDAL_STYLE[m]).filter(Boolean);
+  if (earned.length) {
+    ctx.font = '600 ' + px(9.5) + 'px "Helvetica Neue", Arial, sans-serif';
+    const pad = px(10), gap = px(8), h = px(20);
+    let total = 0;
+    const ws = earned.map(m => { const w = ctx.measureText(m.label).width + pad * 2; total += w; return w; });
+    total += gap * (earned.length - 1);
+    let cx = pcx - total / 2;
+    for (let i = 0; i < earned.length; i++) {
+      const m = earned[i], w = ws[i];
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.strokeStyle = m.col; ctx.lineWidth = px(1.1);
+      ctx.beginPath(); ctx.roundRect(cx, y - px(14), w, h, px(10)); ctx.fill(); ctx.stroke();
+      label(m.label, cx + w / 2, y, 9.5, m.col, 'center');
+      cx += w + gap;
+    }
+    y += px(24);
+  } else {
+    hudText('no medals this run — chase PRECISION · FEATHER · EFFICIENCY', pcx, y - px(2), 10, '#76828c', 'center');
+    y += px(20);
+  }
+  return y;
 }
 
 function drawBoard() {
@@ -7403,6 +7657,8 @@ function frame(now) {
   updateCam(dt);   // (the new dynamic AUTO drives its own projection in mapProj — no per-frame view picking)
   if (shareFx.t > 0) shareFx.t = Math.max(0, shareFx.t - Math.min(0.05, dt || 0.016));
   if (viewTip > 0) viewTip = Math.max(0, viewTip - Math.min(0.05, dt || 0.016));
+  // MK1 outcome flash decays on wall-clock time (dt is 0 while the done screen is up, so use a floor).
+  if (mk1FlashT > 0) mk1FlashT = Math.max(0, mk1FlashT - Math.max(0.008, Math.min(0.05, dt || 0.016)));
 
   if (b && inOrbitalPhase() && autoView && !b.autoChase) {
     moonViewS = 0;               // AUTO map: the wide cruise + the aerobraking approach (Earth + ship + pad + track)
@@ -7431,6 +7687,7 @@ function frame(now) {
   } else {
     drawChaseScene();            // launch + descent + the moon EDL: ONE ground-frame renderer
   }
+  drawMK1Flash();   // MK1 touchdown/crash screen-flash — over the scene, under the HUD/done overlays (no-op unless mars + active)
   if (scene !== 'board') drawHUD();
   if (scene === 'menu') { if (NARROW) drawMenuNarrow(); else drawMenu(); }
   if (scene === 'board') { if (NARROW) drawBoardNarrow(); else drawBoard(); }
