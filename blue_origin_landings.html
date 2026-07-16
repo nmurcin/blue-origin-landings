@@ -506,16 +506,24 @@ function applyModeParams(m) {
   SHIP_MODE = false;
   if (m === 'mars') {
     // BLUE MOON MK1 — uncrewed lunar lander, pure propulsive descent. Vacuum (RHO0=0 zeroes
-    // all aero + heating), 1/6 g. Masses derived from the public ~21,350 kg wet mass in a
-    // descent config. 1× BE-7 (public: 44 kN vac, Isp 460 s) → MDOT = 44000/(460·9.80665)
-    // = 9.75 kg/s. Lunar TWR ≈ 1.65 at 16.5 t; 20% min-throttle TWR ≈ 0.33.
+    // all aero + heating), 1/6 g. Masses at a plausible Blue Moon MK1 descent scale (~9.6 t wet).
+    // 1× BE-7 (public: 44 kN vac, Isp 460 s), uprated to ~33.7 kN for the game's horizontal-braking
+    // profile. MDOT = 33700/(460·9.80665) = 7.471 kg/s (Isp held at the real 460 s).
+    //
+    // THE FEEL WE'RE TUNING FOR — a real Apollo-style powered descent, not a flat brake-and-drop:
+    //   * Full-throttle TWR ≈ 2.17 at 9.6 t wet, ≈ 2.89 near dry. That's crisp hoverslam authority
+    //     with a genuine COMMIT WINDOW (you have to time the terminal burn) — NOT the old 3.9 TWR
+    //     that stopped the vehicle instantly and made the landing trivial.
+    //   * Hover throttle ≈ 0.46 at wet / 0.35 near dry — so cruising the descent sits comfortably
+    //     mid-throttle, leaving headroom to firewall for the arrest. In vacuum the engine is the
+    //     ONLY thing acting on you (no aero to bail you out), so throttle discipline is everything.
+    //   * Total Δv ≈ 1298 m/s vs a clean-descent need of ~450 m/s: a CLEAN, efficient flight lands
+    //     with a fat reserve; a sloppy one that over-brakes and hovers burns MDOT·time and runs you
+    //     dry (full tank = only ~321 s of continuous full thrust). Skill is rewarded, waste bites.
     G = 1.62; RHO0 = 0; HSCALE = 50000;
     ENTRY_Y = 0; FLIP_Y = 0;
-    // Fuel sized for the Apollo-style approach: braking + coast + terminal arrest (with margin for
-    // pilot error but not enough to waste). THRUST uprated slightly from the published 44 kN BE-7
-    // for game-playability with the horizontal-braking profile. Public-data-derived game estimate.
-    DRY_MASS = 7500; FUEL0 = 3000;
-    THRUST = 6.6e4; MDOT = 14.63;         // = 6.6e4 / (460·9.80665)
+    DRY_MASS = 7200; FUEL0 = 2400;
+    THRUST = 3.37e4; MDOT = 7.471;         // = 3.37e4 / (460·9.80665); TWR@wet≈2.17, Δv≈1298 m/s
     CDA_AX = 0; CDA_LAT = 0;               // vacuum — no aero
   } else if (m === 'moon') {
     // BLUE MOON MK2 — rides New Glenn to orbit, docks with a transfer stage for propellant,
@@ -810,6 +818,16 @@ const OCEAN_OK = { vy: 8.5, vx: 7.0, ang: 10 };   // NG 7×2 on Jacklyn
 const NG94_OK  = { vy: 6.0, vx: 4.0, ang: 6 };    // NG 9×4 — tighter (heavier, less margin)
 const MK1_OK   = { vy: 3.5, vx: 2.5, ang: 6 };    // Blue Moon lunar touchdown — land it soft
 const TOWER_OK = { vy: 7.0, vx: 4.5, ang: 6 };    // (retained; chopstick catch no longer used)
+// ---------- MK1 (Blue Moon lunar) engine-feel constants (mars mode ONLY) ----------
+// A real BE-7-class engine can't deep-throttle to zero and doesn't snap between settings — these
+// give the vacuum descent a hand-flown character: the engine LIGHTS to a firm floor and SLEWS.
+// (Read by update()'s mars throttle path and by predictBurnStop's mars terminal-burn model.)
+const MK1_MIN_THROTTLE = 0.25;   // BE-7 can't idle below ~25% — once lit, thrust never drops under this
+                                 // (min-throttle TWR ≈ 0.50@wet / 0.72@dry: idle CANNOT hover — you
+                                 //  must actively firewall to arrest, which is the terminal commit window)
+const MK1_THROTTLE_RATE = 5.5;   // engine spool time-const (1/s): slower than the shared k=8 so the
+                                 // throttle has weight — no instant-on/off. ~0.4 s to ~90% of a step.
+const MK1_IGNITE_EPS = 0.02;     // thr above this + burn held ⇒ engine is "lit" ⇒ the floor applies
 // Per-mode touchdown spec: OK window, target half-width, base/fuel/precision scoring weights.
 function landingSpec(m) {
   if (m === 'tower') return { ok: NG94_OK, padHalf: DECK_HALF_94, base: 500, fuelW: 0.04, precPos: 240, precVy: 170 };
@@ -1661,16 +1679,24 @@ function newRun(m) {
   }
   if (m === 'mars') {
     // BLUE MOON MK1 — Apollo-style powered descent from low lunar orbit. The landing site (a south-
-    // pole crater floor with water ice) is FAR to the LEFT at x=0. The lander spawns ~15 km to the
-    // RIGHT, flying LEFTWARD at orbital-derived velocity. The player brakes retrograde to kill speed,
-    // coasts the long arc, pitches vertical for the terminal hover-slam into the crater. The HUD
-    // shows a distance indicator + arrow pointing LEFT toward the target.
+    // pole crater floor with water ice) is FAR to the LEFT at x=0. The lander spawns ~16 km to the
+    // RIGHT, flying LEFTWARD toward it. The player flies the four-phase Apollo profile:
+    //   1. BRAKING — pitch the engine retrograde (down-right) and burn to bleed the ~215 m/s of
+    //      horizontal velocity while holding altitude (net brake accel ~3.5 m/s² at full throttle).
+    //   2. COAST — cut the engine and fall the long arc under 1/6 g (warp it forward).
+    //   3. PITCH-OVER — stand the lander vertical as the pad comes up.
+    //   4. HOVERSLAM — a timed terminal burn into the crater floor. Idle throttle CANNOT hover, so
+    //      the arrest is a real commit: fire too early and you waste fuel hovering, too late and you
+    //      arrive hot. The HUD distance tape + predicted-stop marker guide the window.
+    // Spawn retuned from the old (15 km / 340 m/s / 55°) so the brake burn is a ~60 s workout rather
+    // than a ~90 s marathon: a bit closer, a bit slower, less initial tilt. ~60-90 s of live flying
+    // at 1× with warp available for the coast. (Public-data-derived geometry; game-tuned.)
     b = {
-      x: 15000 + Math.random() * 1000,          // ~15 km to the RIGHT of the landing site
-      y: 5000 + Math.random() * 500,            // ~5 km altitude (PDI-scale)
-      vx: -(340 + Math.random() * 40),          // fast LEFTWARD (toward the landing site at x=0)
-      vy: -12 - Math.random() * 5,              // slight descent rate (builds under 1/6 g)
-      ang: 55 * Math.PI / 180,                  // tilted ~55° from vertical (engine partly retrograde = to the RIGHT)
+      x: 16000 + Math.random() * 1000,          // ~16 km to the RIGHT of the landing site
+      y: 6000 + Math.random() * 400,            // ~6 km altitude (PDI-scale)
+      vx: -(210 + Math.random() * 20),          // LEFTWARD toward the pad — a ~215 m/s brake workout
+      vy: -14 - Math.random() * 4,              // slight descent rate (builds under 1/6 g)
+      ang: 48 * Math.PI / 180,                  // tilted ~48° from vertical (engine partly retrograde = to the RIGHT)
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -2035,11 +2061,17 @@ function predictBurnStop() {
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: 0, fuel: b.fuel };
   // model the real engine spool-up (same constant as update()) and integrate
   // fine — assuming instant full thrust read the stop ~300 m too high at
-  // landing-burn speeds, promising margin the booster didn't have
+  // landing-burn speeds, promising margin the booster didn't have.
+  // MK1 (mars) spools at the slower MK1_THROTTLE_RATE and is floored at MK1_MIN_THROTTLE once lit,
+  // so the terminal-burn STOP marker A2 draws honestly reflects the BE-7's slower, floored spool
+  // (a full-throttle-instant model read the stop too low for MK1). Other modes: unchanged k=8 spool.
+  const isMK1 = (mode === 'mars');
+  const spoolK = isMK1 ? MK1_THROTTLE_RATE : 8;
   let thr = b.thr;
   for (let i = 0; i < 1500; i++) {
-    thr += (1 - thr) * Math.min(1, 0.025 * 8);
-    stepPhysics(s, 0.025, thr, 0);
+    thr += (1 - thr) * Math.min(1, 0.025 * spoolK);
+    const thrEff = isMK1 ? Math.max(thr, MK1_MIN_THROTTLE) : thr;
+    stepPhysics(s, 0.025, thrEff, 0);
     s.ang *= 0.994; // assume the pilot steers vertical during the burn
     if (s.vy >= 0) return { y: s.y, x: s.x };
     if (s.y <= 0) return { y: s.y, x: s.x };
@@ -2787,13 +2819,25 @@ function update(dt) {
   // manual warp can't freeze the loop; burn/RCS input drops warp to ×1 for the live landing.
   const steps = Math.min(400, Math.max(1, Math.ceil(dt / (1 / 120))));
   const sdt = dt / steps;
+  // MK1 engine feel (mars only): the BE-7 spools SLOWER than the shared k=8 (throttle has weight)
+  // and, once lit, can't sit below MK1_MIN_THROTTLE — a real deep-throttle floor. Off ⇒ clean
+  // shutdown to zero. Everywhere else the shared k=8 ramp is untouched.
+  const thrK = (mode === 'mars') ? MK1_THROTTLE_RATE : 8;
   for (let i = 0; i < steps; i++) {
     // ramp throttle + fin per substep at sdt (see targets above): frame-rate-invariant sub-frame path.
-    b.thr += (thrCmd - b.thr) * smoothK(8, sdt);
+    b.thr += (thrCmd - b.thr) * smoothK(thrK, sdt);
     if (b.thr < 0.02 && !burn && !locked) b.thr = 0;
     b.fin += (finTarget - b.fin) * smoothK(finK, sdt);
     if (Math.abs(b.fin) < 0.02 && !finTarget) b.fin = 0;
-    lastHeat = stepPhysics(b, sdt, b.thr, tq);
+    // MK1 min-throttle floor: while the engine is commanded ON and lit (thr past the ignition eps),
+    // clamp the physics-visible throttle up to the floor — the BE-7 lights to >=25%, never idles
+    // under it. On release, burn is false so the ramp above carries thr cleanly to 0 (shutdown).
+    let thrEff = b.thr;
+    if (mode === 'mars' && burn && b.thr > MK1_IGNITE_EPS) {
+      thrEff = Math.max(b.thr, MK1_MIN_THROTTLE);
+      b.thr = thrEff;   // keep b.thr consistent with what the engine actually produces (audio/plume/HUD read it)
+    }
+    lastHeat = stepPhysics(b, sdt, thrEff, tq);
     // turbulence buffet — integrated per substep (frame-rate-independent). qn recomputed from the
     // evolving state; turb sampled at this substep's time so the delivered angular impulse matches
     // the continuous integral regardless of frame rate.
