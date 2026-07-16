@@ -866,9 +866,9 @@ function loadSave() {
   catch (e) { s = def; }
   if (!s.tiers) s.tiers = {};
   // migrate a pre-tier save: seed the arcade tier from the old flat bests
-  if (!s.tiers.arcade && (s.bestOcean || s.bestTower || s.bestMars || s.oceanWins)) {
+  if (!s.tiers.arcade && (s.bestOcean || s.bestTower || s.bestMars || s.bestMoon || s.oceanWins)) {
     s.tiers.arcade = { oceanWins: s.oceanWins || 0, bestOcean: s.bestOcean || 0,
-                       bestTower: s.bestTower || 0, bestMars: s.bestMars || 0 };
+                       bestTower: s.bestTower || 0, bestMars: s.bestMars || 0, bestMoon: s.bestMoon || 0 };
   }
   return s;
 }
@@ -876,14 +876,14 @@ const save = loadSave();
 function persist() { try { localStorage.setItem('boosterDown', JSON.stringify(save)); } catch (e) {} }
 // Copy the active tier's stored stats into the flat fields the UI reads (call after tier changes).
 function loadTierStats() {
-  const t = save.tiers[tier] || { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0 };
+  const t = save.tiers[tier] || { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0, bestMoon: 0 };
   save.oceanWins = t.oceanWins || 0; save.bestOcean = t.bestOcean || 0;
-  save.bestTower = t.bestTower || 0; save.bestMars = t.bestMars || 0;
+  save.bestTower = t.bestTower || 0; save.bestMars = t.bestMars || 0; save.bestMoon = t.bestMoon || 0;
 }
 // Write the flat fields back into the active tier's block, then persist.
 function saveTierStats() {
   save.tiers[tier] = { oceanWins: save.oceanWins, bestOcean: save.bestOcean,
-                       bestTower: save.bestTower, bestMars: save.bestMars };
+                       bestTower: save.bestTower, bestMars: save.bestMars, bestMoon: save.bestMoon };
   persist();
 }
 tier = save.tier || 'arcade';   // restore the picked tier
@@ -1285,7 +1285,10 @@ function updateMoonChips() {
   const showFF = !!b && scene === 'flying';
   wC.style.display = showFF ? 'flex' : 'none';
   if (showFF) {
-    const x = moon ? WARP_STEPS[warpIdx] : timeScale;
+    // mars (MK1) AND moon both climb the WARP_STEPS ladder (warpStep + frame() gate on
+    // mode==='moon'||'mars'); only ocean/tower use timeScale. Match that here or the chip
+    // lies — mars-on-mobile was frozen at ×1 while the sim actually fast-forwarded.
+    const x = (mode === 'moon' || mode === 'mars') ? WARP_STEPS[warpIdx] : timeScale;
     wV.textContent = '×' + x;
     wV.classList.toggle('warpOn', x > 1);                             // lit amber while fast-forwarding
   }
@@ -1641,6 +1644,7 @@ function newRun(m) {
       prevPinY: 1e9, missT: 0, missReason: '', t: 0,
       phase: 'launch', staged: false,
       ox: 0, oy: 0, ovx: 0, ovy: 0, pa: 0,   // orbital state (km, km/s)
+      rcsFuel: RCS0.moon || 1500, rcsFuel0: RCS0.moon || 1500,   // RCS bank (this branch returns early, before the shared L1729 assignment)
       maxQ: 0
     };
     env = { windBase: (Math.random() * 2 - 1) * 6, windGust: 2 + Math.random() * 3,
