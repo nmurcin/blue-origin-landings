@@ -828,6 +828,14 @@ const MK1_MIN_THROTTLE = 0.25;   // BE-7 can't idle below ~25% — once lit, thr
 const MK1_THROTTLE_RATE = 5.5;   // engine spool time-const (1/s): slower than the shared k=8 so the
                                  // throttle has weight — no instant-on/off. ~0.4 s to ~90% of a step.
 const MK1_IGNITE_EPS = 0.02;     // thr above this + burn held ⇒ engine is "lit" ⇒ the floor applies
+// ---------- MK1 regolith dust-kick (mars-only visual; owned by A3) ----------
+// The BE-7 plume blasts lunar dust off the surface on terminal descent. NO atmosphere ⇒ the grains
+// fly in straight BALLISTIC arcs (radially outward + up), then fall under 1/6 g — never billowing
+// clouds. Kicks in once the plume is close to the ground. Purely cosmetic; self-updates in drawParticles.
+const MK1_DUST_ALT = 90;         // start kicking dust when b.y (plume) is under this altitude (m)
+const MK1_DUST_G = 1.62;         // lunar gravity for the ballistic fall (matches mars G)
+let mk1Dust = [];                // {x,y,vx,vy,age,life,r} in WORLD metres
+let mk1DustLast = 0;             // performance.now() of the previous dust update (for dt)
 // Per-mode touchdown spec: OK window, target half-width, base/fuel/precision scoring weights.
 function landingSpec(m) {
   if (m === 'tower') return { ok: NG94_OK, padHalf: DECK_HALF_94, base: 500, fuelW: 0.04, precPos: 240, precVy: 170 };
@@ -3074,19 +3082,53 @@ function curveOff(wx) {
 
 // ---------- Drawing ----------
 function drawSky() {
-  // MK1 lunar descent: the Moon has no atmosphere — BLACK sky with stars and Earth as a prop.
+  // MK1 lunar descent: the Moon has no atmosphere — a deep-black sky, a dense starfield, and
+  // Earth hanging as a blue marble. South-pole sun is LOW and raking, so a faint glare sits near
+  // the horizon and the terrain casts long shadows (drawn in drawGround).
   if (mode === 'mars') {
-    ctx.fillStyle = '#04060c'; ctx.fillRect(0, 0, W, H);
-    // always-on starfield
-    ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    // near-black space, a hair of blue toward the top (no atmospheric scattering — subtle only)
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#02030a');
+    g.addColorStop(0.7, '#04050d');
+    g.addColorStop(1, '#070812');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // dense parallax starfield: distant fixed field (drawStarfield) + a nearer world-anchored layer
+    drawStarfield(0.9, (-cam.x * cam.s * 0.015) % W, 0);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
     for (const s of stars) {
-      const sx = w2sX(s.x * 0.4 + cam.x * 0.6), sy = w2sY(s.y);
-      if (sx > -5 && sx < W + 5 && sy > -5 && sy < H + 5)
+      const sx = w2sX(s.x * 0.5 + cam.x * 0.5), sy = w2sY(s.y * 0.12 + 9000);
+      if (sx > -5 && sx < W + 5 && sy > -5 && sy < H + 5) {
+        const tw = 0.55 + 0.45 * h01(s.x * 0.13 + Math.floor(b ? b.t * 1.3 : 0));   // gentle twinkle
+        ctx.globalAlpha = tw;
         ctx.fillRect(sx, sy, s.r * devicePixelRatio, s.r * devicePixelRatio);
+      }
     }
-    // Earth as a background prop (small, upper-right area)
-    const erx = W - px(80), ery = px(80), esz = px(28);
+    ctx.globalAlpha = 1;
+    // low raking sun near the LEFT horizon (south-pole grazing light) — a small hard disk + soft glare
+    const sunX = W * 0.14, sunY = H * 0.62;
+    const halo = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, px(120));
+    halo.addColorStop(0, 'rgba(255,251,238,0.55)');
+    halo.addColorStop(0.2, 'rgba(255,248,228,0.16)');
+    halo.addColorStop(1, 'rgba(255,246,222,0)');
+    ctx.fillStyle = halo; ctx.fillRect(sunX - px(125), sunY - px(125), px(250), px(250));
+    ctx.fillStyle = '#fffdf3';
+    ctx.beginPath(); ctx.arc(sunX, sunY, px(8), 0, Math.PI * 2); ctx.fill();
+    // EARTH — the emotional hook. A gorgeous blue marble high in the black sky, with a soft
+    // atmosphere ring. Parallax-locked slightly to the camera so it feels distant/fixed.
+    const erx = W * 0.72 - cam.x * cam.s * 0.006, ery = H * 0.24, esz = px(46);
+    const glow = ctx.createRadialGradient(erx, ery, esz * 0.9, erx, ery, esz * 1.45);
+    glow.addColorStop(0, 'rgba(120,175,240,0.30)');
+    glow.addColorStop(1, 'rgba(120,175,240,0)');
+    ctx.fillStyle = glow; ctx.fillRect(erx - esz * 1.5, ery - esz * 1.5, esz * 3, esz * 3);
     drawEarthDisk(erx, ery, esz);
+    // terminator shadow on Earth (sunlit from the lower-left, matching the low sun)
+    const term = ctx.createRadialGradient(erx - esz * 0.4, ery + esz * 0.4, esz * 0.2, erx, ery, esz * 1.05);
+    term.addColorStop(0, 'rgba(0,0,0,0)');
+    term.addColorStop(1, 'rgba(3,5,12,0.62)');
+    ctx.save();
+    ctx.beginPath(); ctx.arc(erx, ery, esz, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = term; ctx.fillRect(erx - esz, ery - esz, esz * 2, esz * 2);
+    ctx.restore();
     return;
   }
   const h = b ? b.y : 18000;
@@ -3162,7 +3204,7 @@ function surfacePath(close) {
 // scattered cloud deck at 2-6 km: soft feathered puffs and wispy sheets,
 // drifting with the wind. All edges are gradients — nothing hard.
 function drawClouds() {
-  if (!b || SHIP_MODE) return;   // no cloud deck in 1% atmosphere
+  if (!b || SHIP_MODE || mode === 'mars') return;   // no cloud deck in 1% atmosphere; NONE in lunar vacuum
   const drift = env.windBase * b.t * 0.6;
   for (const c of clouds) {
     const cx = c.x + drift;
@@ -3298,8 +3340,9 @@ function drawGround() {
   const gy = w2sY(0);
   if (gy > H + 80 * devicePixelRatio) return;
   const curveF = Math.min(1, Math.max(0, ((b ? b.y : 0) - 3500) / 14000));
-  // layered atmosphere hugging the curved limb — the thin blue line
-  if (curveF > 0.12) {
+  // layered atmosphere hugging the curved limb — the thin blue line. NONE on the airless Moon:
+  // the lunar limb is a razor-sharp black-on-grey line, no scattering glow (mars = MK1 vacuum).
+  if (curveF > 0.12 && mode !== 'mars') {
     ctx.save();
     const layers = SHIP_MODE ? [
       [2200, '180,110,60',  0.08],
@@ -3319,8 +3362,8 @@ function drawGround() {
     }
     ctx.restore();
   }
-  // horizon haze where the sky meets the surface, down low
-  if (curveF < 0.6) {
+  // horizon haze where the sky meets the surface, down low — NEVER in vacuum (mars = MK1 Moon)
+  if (curveF < 0.6 && mode !== 'mars') {
     const hzH = 90 * devicePixelRatio;
     const hz = ctx.createLinearGradient(0, gy - hzH, 0, gy);
     hz.addColorStop(0, 'rgba(232,242,250,0)');
@@ -3444,50 +3487,86 @@ function drawGround() {
     }
     ctx.restore();
   } else if (mode === 'mars' || (mode === 'moon' && b && b.phase === 'lunardesc')) {
-    // LUNAR SOUTH POLE: dark regolith with MANY craters; the landing site is the floor of a
-    // gently-sloping crater at x=0. Water ice decorations at the target. No pad, no infrastructure.
+    // LUNAR SOUTH POLE: dark regolith lit by a LOW, RAKING sun from the LEFT. Crater rims throw
+    // long shadows to the RIGHT; layered ridgelines give the horizon real depth. The landing site
+    // is a gently-sloping crater floor at x=0, ringed by an illuminated target beacon. No infra.
+    // ---- distant layered ridgelines behind the horizon (parallax depth; drawn before the surface) ----
+    if (curveF < 0.4) {
+      const hz = w2sY(0);
+      const ridges = [[0.10, '#141821', 46, 0.7], [0.22, '#1c212c', 30, 1.3], [0.40, '#242a36', 20, 2.1]];
+      for (const [par, col, amp, freq] of ridges) {
+        const rly = hz + Math.max(2, 8 * cam.s) * (1 - par) + Math.max(4 * devicePixelRatio, 3 * cam.s);
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.moveTo(0, H);
+        const ph = cam.x * par * 0.02;
+        for (let sx = 0; sx <= W; sx += 22 * devicePixelRatio) {
+          const n = Math.sin(sx * 0.004 * freq + ph) + 0.5 * Math.sin(sx * 0.011 * freq + ph * 1.7);
+          ctx.lineTo(sx, rly - n * amp * devicePixelRatio - amp * devicePixelRatio);
+        }
+        ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+      }
+    }
     const deep = Math.min(H, gy + Math.max(300 * devicePixelRatio, 1500 * cam.s));
     const g = ctx.createLinearGradient(0, gy, 0, deep);
-    g.addColorStop(0, '#6a6e74');
-    g.addColorStop(0.12, '#4a4d52');
+    g.addColorStop(0, '#767a80');       // sunlit near-surface (brighter than before so the lander reads against it)
+    g.addColorStop(0.12, '#4e5158');
     g.addColorStop(0.5, '#2a2d31');
-    g.addColorStop(1, '#0c0e11');
+    g.addColorStop(1, '#0a0c0f');
     ctx.fillStyle = g;
     surfacePath(true);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(180,185,192,0.35)';
-    ctx.lineWidth = Math.max(1, 0.4 * cam.s);
+    // crisp sunlit surface edge (a razor lunar limb — the sun grazes it bright)
+    ctx.strokeStyle = 'rgba(214,220,228,0.6)';
+    ctx.lineWidth = Math.max(1.2 * devicePixelRatio, 0.5 * cam.s);
     surfacePath(false);
     ctx.stroke();
     ctx.save();
     ctx.translate(0, -curveOff(0) * cam.s);
     const pm = (v) => Math.max(v * cam.s, v * 0.5 * devicePixelRatio);
-    // MANY craters (procedural, world-anchored, covers the whole visible surface)
-    ctx.strokeStyle = 'rgba(50,55,62,0.7)'; ctx.lineWidth = Math.max(1, 0.4 * cam.s);
     const viewW = W / (cam.s || 1), leftC = Math.floor((cam.x - viewW / 2) / 80) * 80;
+    // MANY craters (procedural, world-anchored). LOW sun ⇒ bright LEFT rim, dark floor, LONG shadow RIGHT.
     for (let wx = leftC; wx < cam.x + viewW / 2 + 80; wx += 80) {
       const cr = 12 + h01(wx * 0.37) * 40;   // crater radius 12-52 m
       const cd = 2 + h01(wx * 0.81) * 5;     // crater depth (visual)
       if (h01(wx * 0.53) < 0.35) continue;   // skip ~35% of slots for variety
       const scx = w2sX(wx + h01(wx * 1.2) * 40 - 20), scr = pm(cr);
-      if (scx < -scr * 2 || scx > W + scr * 2) continue;
-      ctx.beginPath(); ctx.ellipse(scx, gy + pm(cd * 0.3), scr, pm(cd * 0.7), 0, 0, Math.PI); ctx.stroke();
-      ctx.fillStyle = 'rgba(20,22,26,0.3)';
-      ctx.beginPath(); ctx.ellipse(scx, gy + pm(cd * 0.3), scr * 0.85, pm(cd * 0.45), 0, 0, Math.PI); ctx.fill();
+      if (scx < -scr * 2.4 || scx > W + scr * 2.4) continue;
+      const cy = gy + pm(cd * 0.3);
+      // long raking shadow cast to the RIGHT of the rim
+      ctx.fillStyle = 'rgba(6,8,11,0.55)';
+      ctx.beginPath(); ctx.ellipse(scx + scr * 0.55, cy, scr * 1.5, pm(cd * 0.6), 0, Math.PI * 0.05, Math.PI * 0.95); ctx.fill();
+      // dark crater bowl
+      ctx.fillStyle = 'rgba(16,18,22,0.5)';
+      ctx.beginPath(); ctx.ellipse(scx, cy, scr * 0.85, pm(cd * 0.45), 0, 0, Math.PI); ctx.fill();
+      // sunlit LEFT rim highlight
+      ctx.strokeStyle = 'rgba(198,204,212,0.5)'; ctx.lineWidth = Math.max(1, pm(cd * 0.22));
+      ctx.beginPath(); ctx.ellipse(scx, cy, scr, pm(cd * 0.7), 0, Math.PI * 0.55, Math.PI * 1.05); ctx.stroke();
     }
-    // the TARGET landing site at x=0: floor of a gentle crater with WATER ICE decorations
+    // ---- the TARGET landing site at x=0: illuminated crater floor + beacon ring ----
     const lsx = w2sX(0), lsr = pm(45);
-    // gentle crater depression (the landing zone)
-    ctx.fillStyle = 'rgba(15,18,22,0.4)';
+    // gentle bowl depression
+    ctx.fillStyle = 'rgba(12,15,19,0.45)';
     ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI); ctx.fill();
-    ctx.strokeStyle = 'rgba(100,110,120,0.5)'; ctx.lineWidth = Math.max(1, 0.35 * cam.s);
-    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI); ctx.stroke();
+    // a faint lit apron so the aim point glows out of the dark surface
+    const apron = ctx.createRadialGradient(lsx, gy + pm(1), pm(2), lsx, gy + pm(1), lsr * 1.15);
+    apron.addColorStop(0, 'rgba(150,205,255,0.22)');
+    apron.addColorStop(1, 'rgba(150,205,255,0)');
+    ctx.fillStyle = apron; ctx.fillRect(lsx - lsr * 1.2, gy - lsr * 0.7, lsr * 2.4, lsr * 1.4);
+    // bright bullseye ring on the rim (the unmistakable aim point — cyan-white beacon)
+    const beat = 0.6 + 0.4 * Math.sin((b ? b.t : 0) * 3.2);   // slow pulse
+    ctx.strokeStyle = 'rgba(120,230,190,' + (0.5 + 0.4 * beat).toFixed(2) + ')';
+    ctx.lineWidth = Math.max(1.6 * devicePixelRatio, 0.5 * cam.s);
+    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(1.6), lsr * 0.5, pm(2), 0, 0, Math.PI * 2); ctx.stroke();
+    // center beacon tick
+    ctx.strokeStyle = 'rgba(150,240,200,' + (0.6 + 0.4 * beat).toFixed(2) + ')';
+    ctx.beginPath(); ctx.moveTo(lsx, gy - pm(3)); ctx.lineTo(lsx, gy + pm(3)); ctx.stroke();
     // water ice patches (pale blue-white spots in the crater floor — the reason we're landing here)
-    ctx.fillStyle = 'rgba(200,230,255,0.55)';
+    ctx.fillStyle = 'rgba(205,232,255,0.6)';
     for (const [ox, ow] of [[-18,8],[-5,12],[10,6],[22,9],[-30,5]]) {
       ctx.beginPath(); ctx.ellipse(w2sX(ox), gy + pm(2.5), pm(ow), pm(1.2), 0, 0, Math.PI * 2); ctx.fill();
     }
-    // small rocks + boulders (scattered)
+    // small rocks + boulders (scattered) with short raking shadows to the right
     if (cam.s > 0.35) {
       const left = Math.floor((cam.x - viewW / 2) / 14) * 14;
       for (let wx = left; wx < cam.x + viewW / 2 + 14; wx += 14) {
@@ -3496,8 +3575,11 @@ function drawGround() {
         const depth = 1.5 + h01(wx) * 18;
         const sy2 = gy + depth * cam.s;
         if (sy2 > H) continue;
-        ctx.fillStyle = rh > 0.8 ? 'rgba(35,38,42,0.7)' : 'rgba(85,90,96,0.6)';
-        ctx.fillRect(w2sX(wx), sy2, Math.max(2, (0.7 + h01(wx * 1.7) * 2) * cam.s), Math.max(1.5, (0.4 + h01(wx * 2.3)) * cam.s));
+        const rw = Math.max(2, (0.7 + h01(wx * 1.7) * 2) * cam.s), rhpx = Math.max(1.5, (0.4 + h01(wx * 2.3)) * cam.s);
+        ctx.fillStyle = 'rgba(6,8,11,0.4)';   // shadow
+        ctx.fillRect(w2sX(wx) + rw, sy2, rw * 1.6, rhpx * 0.6);
+        ctx.fillStyle = rh > 0.8 ? 'rgba(120,126,133,0.75)' : 'rgba(96,101,108,0.65)';   // sunlit stone
+        ctx.fillRect(w2sX(wx), sy2, rw, rhpx);
       }
     }
     ctx.restore();
@@ -4334,14 +4416,24 @@ function drawBooster() {
   // exhaust flame — widens in thin air, shows shock diamonds under throttle.
   // NG methalox = purple/blue; MK1 hydrolox (BE-7) = pale blue/white.
   if (b.thr > 0.04 && b.fuel > 0) {
-    const expand = 1 + Math.max(0, 1 - rho(b.y) / 0.5) * 0.7;
-    const fl = b.thr * (26 + Math.random() * 9);
+    // In VACUUM (mars) the BE-7 plume is TIGHT + bright (no air to billow into); NG widens in thin air.
+    const expand = mode === 'mars' ? 1.0 : 1 + Math.max(0, 1 - rho(b.y) / 0.5) * 0.7;
+    const fl = b.thr * (26 + Math.random() * 9) * (mode === 'mars' ? 1.15 : 1);
+    if (mode === 'mars') {
+      // engine glow halo at the nozzle — a soft blue-white bloom (methalox-blue/white BE-7 flame)
+      const bloom = ctx.createRadialGradient(0, 0, 0, 0, 0, 8 * VW + 6);
+      bloom.addColorStop(0, 'rgba(200,228,255,0.55)');
+      bloom.addColorStop(0.5, 'rgba(150,195,255,0.20)');
+      bloom.addColorStop(1, 'rgba(120,170,240,0)');
+      ctx.fillStyle = bloom;
+      ctx.fillRect(-(8 * VW + 6), -(8 * VW + 6), 2 * (8 * VW + 6), 2 * (8 * VW + 6));
+    }
     const g = ctx.createLinearGradient(0, 0, 0, fl);
     if (mode === 'mars') {
-      // BE-7 hydrolox: pale blue / near-white (hydrogen burns almost invisibly, with a blue tint)
-      g.addColorStop(0, 'rgba(220,235,255,0.92)');
-      g.addColorStop(0.4, 'rgba(140,180,240,0.75)');
-      g.addColorStop(1, 'rgba(100,150,220,0)');
+      // BE-7 hydrolox: bright white core → methalox blue → transparent (tight, hard-edged in vacuum)
+      g.addColorStop(0, 'rgba(236,246,255,0.97)');
+      g.addColorStop(0.35, 'rgba(150,195,255,0.82)');
+      g.addColorStop(1, 'rgba(96,150,235,0)');
     } else {
       // BE-4 methalox: blue-purple core with a violet outer (methane burns blue-violet)
       g.addColorStop(0, 'rgba(200,210,255,0.95)');
@@ -4355,17 +4447,18 @@ function drawBooster() {
     ctx.closePath();
     ctx.fill();
     // bright inner cone
-    ctx.fillStyle = mode === 'mars' ? 'rgba(230,245,255,0.9)' : 'rgba(180,170,255,0.9)';
+    ctx.fillStyle = mode === 'mars' ? 'rgba(244,250,255,0.95)' : 'rgba(180,170,255,0.9)';
     ctx.beginPath();
     ctx.moveTo(-1.4 * VW, 0);
     ctx.quadraticCurveTo(0, fl * 0.45, 1.4 * VW, 0);
     ctx.closePath();
     ctx.fill();
-    if (b.thr > 0.5) {
-      ctx.fillStyle = 'rgba(255,243,214,0.85)';
+    // shock diamonds — brighter/tighter on the vacuum BE-7, subtler on NG in atmosphere
+    if (b.thr > 0.5 || mode === 'mars') {
+      ctx.fillStyle = mode === 'mars' ? 'rgba(255,250,235,0.9)' : 'rgba(255,243,214,0.85)';
       for (const d of [0.26, 0.5, 0.72]) {
         ctx.beginPath();
-        ctx.ellipse(0, fl * d, 1.05 * (1 - d * 0.5), 2.1 * (1 - d * 0.4), 0, 0, Math.PI * 2);
+        ctx.ellipse(0, fl * d, (mode === 'mars' ? 0.7 : 1.05) * (1 - d * 0.5), 2.1 * (1 - d * 0.4), 0, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -4442,6 +4535,26 @@ function drawBooster() {
   // Landing legs: deploy from the aft/skirt near touchdown (same mechanic as the original Falcon 9
   // code). NG legs swing out from the gold skirt; MK1 lander legs are always deployed.
   drawLandingLegs(mode === 'mars' ? MK1_H : NG_H);
+  // MK1 lander legibility against the dark lunar surface: a cool sunlit rim-light down the LEFT edge
+  // (low sun grazes from the left) + a blinking red nav beacon at the top so the lander always reads.
+  if (mode === 'mars') {
+    const hw = MK1_H * 0.38;   // lander half-width in the traced frame (aspect ~0.76 → ~0.38 half)
+    // sunlit rim-light: bright hairline down the left flank
+    ctx.strokeStyle = 'rgba(224,236,255,0.7)';
+    ctx.lineWidth = MK1_H * 0.02;
+    ctx.beginPath(); ctx.moveTo(-hw * 0.92, -MK1_H * 0.06); ctx.lineTo(-hw * 0.86, -MK1_H * 0.92); ctx.stroke();
+    // blinking red nav beacon at the top of the module (~1 Hz)
+    const blink = ((b ? b.t : 0) % 1) < 0.5;
+    if (blink) {
+      const nvx = hw * 0.2, nvy = -MK1_H * 0.9;
+      const ng = ctx.createRadialGradient(nvx, nvy, 0, nvx, nvy, MK1_H * 0.08);
+      ng.addColorStop(0, 'rgba(255,90,80,0.95)'); ng.addColorStop(1, 'rgba(255,60,50,0)');
+      ctx.fillStyle = ng;
+      ctx.fillRect(nvx - MK1_H * 0.08, nvy - MK1_H * 0.08, MK1_H * 0.16, MK1_H * 0.16);
+      ctx.fillStyle = 'rgba(255,180,170,0.95)';
+      ctx.beginPath(); ctx.arc(nvx, nvy, MK1_H * 0.018, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   ctx.restore();
 
   // reentry plasma — forms at the AFT/engine end (which faces into the airflow tail-first) and
@@ -4754,6 +4867,7 @@ function drawShip() {
 }
 
 function drawParticles() {
+  if (mode === 'mars') { drawMK1Dust(); return; }   // vacuum: NO smoke plume; only the ballistic dust-kick
   for (const p of particles) {
     const t = p.age / p.life;
     const sx = w2sX(p.x), sy = w2sY(p.y);
@@ -4772,6 +4886,53 @@ function drawParticles() {
     ctx.arc(sx, sy, r, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+// MK1 REGOLITH DUST-KICK (mars-only). Self-contained: spawns, updates (ballistic, no drag), and
+// renders. Called once per frame from drawParticles' mars path. Grains fly radially outward + up
+// off the impingement point under the engine, then fall under 1/6 g in straight lines — the real
+// airless-Moon look (no billowing). Lazy-inits its own state; no dependence on the physics loop.
+function drawMK1Dust() {
+  const now = performance.now();
+  let dt = (mk1DustLast ? (now - mk1DustLast) / 1000 : 0);
+  mk1DustLast = now;
+  if (!(dt >= 0) || dt > 0.1) dt = 0.016;   // clamp big gaps (tab switch, first frame)
+  if (mk1Dust === undefined) mk1Dust = [];
+  // SPAWN: only while the plume is lit AND the ground is close under it (terminal descent).
+  // The plume impingement point is just below the lander base (b.x, ~0 altitude at touchdown).
+  if (b && scene === 'flying' && b.thr > 0.15 && b.fuel > 0 && b.y < MK1_DUST_ALT && b.y > -2) {
+    const prox = 1 - Math.max(0, b.y) / MK1_DUST_ALT;    // 0 far, 1 at the deck — denser as she nears
+    const n = Math.min(6, Math.floor(1 + prox * prox * 6 * b.thr));
+    const gx = b.x + Math.sin(b.ang) * 1.0;              // impingement roughly under the nozzle
+    for (let i = 0; i < n && mk1Dust.length < 260; i++) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const spd = (18 + Math.random() * 46) * (0.5 + prox);        // outward blast speed (m/s)
+      const ang = (12 + Math.random() * 34) * Math.PI / 180;       // low, near-horizontal ejecta
+      mk1Dust.push({
+        x: gx + side * (0.4 + Math.random() * 1.2), y: 0.3 + Math.random() * 0.8,
+        vx: side * Math.cos(ang) * spd, vy: Math.sin(ang) * spd * (0.5 + Math.random() * 0.5),
+        age: 0, life: 0.9 + Math.random() * 1.6, r: 0.5 + Math.random() * 1.4
+      });
+    }
+  }
+  // UPDATE + RENDER (ballistic: straight arcs under lunar gravity, no drag → no clouds)
+  const gyBase = w2sY(0);
+  const out = [];
+  for (const p of mk1Dust) {
+    p.age += dt;
+    p.vy -= MK1_DUST_G * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.y <= 0 && p.vy < 0) { p.y = 0; p.vy *= -0.18; p.vx *= 0.6; }   // low bounce, quickly settles
+    if (p.age < p.life && Math.abs(p.x - (b ? b.x : 0)) < 400) out.push(p);
+    const t = p.age / p.life;
+    const sx = w2sX(p.x), sy = w2sY(p.y);
+    if (sx < -20 || sx > W + 20 || sy > gyBase + 40) continue;
+    const r = Math.max(1 * devicePixelRatio, p.r * cam.s);
+    // pale sunlit regolith grain, fading as it settles
+    ctx.fillStyle = 'rgba(198,200,205,' + (0.7 * (1 - t)).toFixed(2) + ')';
+    ctx.fillRect(sx, sy, r, r);
+  }
+  mk1Dust = out;
 }
 
 // ---------- HUD ----------

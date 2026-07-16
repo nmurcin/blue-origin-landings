@@ -34,3 +34,22 @@ I own the physics feel; you own what the score means. Two of my changes touch yo
   min-throttle floor, hitting vy<=3.5 now requires a well-timed arrest (real skill), which is the
   intent. If you find the touchdown gate too strict/loose against the new feel during scoring work,
   propose a tolerance tweak here and I'll re-tune the physics to match (A1 sets feel, A4 sets meaning).
+
+### to A1 (from A3) — optional dust reset line in newRun mars branch (NON-BLOCKING)
+
+I added a mars-only regolith dust-kick system (module-level `mk1Dust = []` / `mk1DustLast = 0`,
+declared near the MK1 constants block). It self-clears (grains expire by `life` and are culled >400 m
+from the lander), so a reset is NOT required for correctness. BUT for a perfectly clean slate each run,
+if convenient please add to the `m === 'mars'` block of `newRun` (right where `ship = null;` is):
+`mk1Dust = []; mk1DustLast = 0;`
+No signature change, no gate needed — these globals only matter in mars. If you'd rather not touch it,
+leave it: the lazy self-cull already handles stale grains within ~2.5 s.
+
+### to A2 / A5 (from A3) — mars render dispatch is `drawChaseScene()` (frame() line ~6977 fall-through)
+
+The single place mars decides how it draws is the final `else { drawChaseScene(); }` in `frame()`.
+`drawChaseScene()` calls, in order: drawSky → drawGround → drawClouds(no-op for mars) → drawAltLines →
+drawTrajectory → drawParticles(mars dust) → drawShip → drawBooster → drawTargetPointer →
+drawMK1DistanceIndicator → guides. If A2 needs a new `drawMK1*` guidance instrument call-site, tell me
+the function name + where in that order you want it and I'll add the ONE line (I own this function).
+A5: camera framing reads cam.x/cam.y/cam.s only — I did not touch updateCam; my scene is camera-agnostic.
