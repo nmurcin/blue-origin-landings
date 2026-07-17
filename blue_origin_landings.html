@@ -464,6 +464,15 @@ const GLIDE_LIFT_BOOST = 1.8;  // ×lift during the post-burn glide. REDUCED 3.6
                                //   is needed, so a gentler boost gives precise, controllable crossrange.
 const GLIDE_CLAMP_G    = 3.0;  // lift ceiling (×weight) during the glide only (5.0→3.0 to match the smaller
                                //   boost); base LIFT_CLAMP_G applies everywhere else.
+// GLIDE STEER RESHAPE — see the glide CL block in stepPhysics. The pilot reported the glide bank
+// "looks wrong": weak, asymmetric, and "bank harder = steer less". Root cause: the raw flat-plate
+// CL=½·sin(2β) peaks at β=45° then FALLS/reverses, and the down-right descent puts the neutral body
+// already past the peak. These reshape the glide-only crossrange lift so banking is STRONG, SYMMETRIC,
+// and MONOTONIC (more bank ⇒ more steer) without touching the fast pre-burn regime, terminal, or mars/moon.
+const GLIDE_STALL_CAP  = 0.96; // rad (~55°): |bank| is clamped here so glide CL saturates at ~peak instead of
+                               //   falling into stall — steering never gets WEAKER as the pilot banks harder.
+const GLIDE_STEER_K    = 0.90; // crossrange gain in the glide: steering coefficient off body-bank-from-vertical
+                               //   so a lean visibly walks the touchdown. Judged via testing/wing_judge.py.
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
 // acceleration, the resulting spin PERSISTS, and a light bleed (no air up here, so
 // this is reaction-wheel trim) lets a runaway rate be nulled in a few seconds.
@@ -2002,7 +2011,30 @@ function stepPhysics(s, dt, thr, tq) {
     let sinB = vno / spdS;                                  // signed sin(β); vno computed above
     if (sinB >  1) sinB =  1; else if (sinB < -1) sinB = -1;
     const cosB = Math.sqrt(Math.max(0, 1 - sinB * sinB));
-    const CL   = sinB * cosB;                               // = ½·sin(2β), sign carried by sinB
+    let CL   = sinB * cosB;                                 // = ½·sin(2β), sign carried by sinB
+    // GLIDE STEER RESHAPE (NG booster glide only): the raw flat-plate CL=½·sin(2β) PEAKS at β=45°,
+    // FALLS toward stall past it, AND its sign is tied to β = angle(body, wind). Because the booster
+    // descends DOWN-AND-RIGHT, the flow is tilted well off vertical, so β ≈ bodyLean + flowSlope: a
+    // symmetric body bank maps to an ASYMMETRIC β that sits past the peak on one side and reverses
+    // through zero on the other. Measured baseline (wing_judge.py): lean-20 +290 m vs lean+20 -547 m
+    // (symmetry 0.53), and lean-30 steered LESS than lean-20 (over-bank stall). That is the weak/
+    // asymmetric "bank harder ⇒ steer less" feel the pilot reported. FIX below.
+    if (inGlide) {
+      // Drive the glide steer off the pilot's BODY BANK FROM VERTICAL (s.ang), NOT the geometric β.
+      // Bank-from-vertical is exactly what the pilot commands, so steering on it is naturally
+      // SYMMETRIC (equal left/right) and MONOTONIC (more bank ⇒ more steer). Clamp to the pre-stall
+      // band so a committed bank saturates instead of stalling. The lift still acts perpendicular to
+      // velocity (true aero direction below); only its coefficient is re-referenced, glide-only.
+      let bank = s.ang;                                      // body lean from vertical (ang=0 = upright)
+      if (bank >  GLIDE_STALL_CAP) bank =  GLIDE_STALL_CAP;
+      else if (bank < -GLIDE_STALL_CAP) bank = -GLIDE_STALL_CAP;
+      // sin(bank)·cos(bank) keeps a flat-plate-like shape but now centered on the pilot's neutral
+      // (upright) attitude: zero when upright, growing symmetrically as she banks either way, sign
+      // carrying the bank direction. The leading minus preserves the ESTABLISHED, verified game sign
+      // (lean LEFT ⇒ land RIGHT): the bank-referenced coefficient correlates oppositely to the old
+      // β-referenced one, so we negate to keep the exact same steer DIRECTION — mechanism unchanged.
+      CL = -GLIDE_STEER_K * Math.sin(bank) * Math.cos(bank);
+    }
     const clk  = (mode === 'tower' ? CL_K * 1.35 : CL_K);   // keep the tower lift multiplier
     // BOOST crossrange in the glide phase (the "second third") so the tilt flies the booster a LONG
     // way downrange, as the pilot wants. Elsewhere (decel burn, terminal) lift is unboosted.
