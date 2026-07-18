@@ -473,6 +473,10 @@ const GLIDE_STALL_CAP  = 0.96; // rad (~55°): |bank| is clamped here so glide C
                                //   falling into stall — steering never gets WEAKER as the pilot banks harder.
 const GLIDE_STEER_K    = 0.90; // crossrange gain in the glide: steering coefficient off body-bank-from-vertical
                                //   so a lean visibly walks the touchdown. Judged via testing/wing_judge.py.
+// Which way banking steers, A/B-toggleable live with the 'B' key so the pilot can pick by feel:
+//   +1 = "lean the way you want to go" (bank RIGHT => curve RIGHT — real-wing / aircraft / true-aero /
+//        original-baseline convention). -1 = "lean away" (bank LEFT => curve RIGHT).
+let GLIDE_STEER_SIGN = 1;      // default: real-wing (lean into the turn)
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
 // acceleration, the resulting spin PERSISTS, and a light bleed (no air up here, so
 // this is reaction-wheel trim) lets a runaway rate be nulled in a few seconds.
@@ -2028,12 +2032,11 @@ function stepPhysics(s, dt, thr, tq) {
       let bank = s.ang;                                      // body lean from vertical (ang=0 = upright)
       if (bank >  GLIDE_STALL_CAP) bank =  GLIDE_STALL_CAP;
       else if (bank < -GLIDE_STALL_CAP) bank = -GLIDE_STALL_CAP;
-      // sin(bank)·cos(bank) keeps a flat-plate-like shape but now centered on the pilot's neutral
-      // (upright) attitude: zero when upright, growing symmetrically as she banks either way, sign
-      // carrying the bank direction. The leading minus preserves the ESTABLISHED, verified game sign
-      // (lean LEFT ⇒ land RIGHT): the bank-referenced coefficient correlates oppositely to the old
-      // β-referenced one, so we negate to keep the exact same steer DIRECTION — mechanism unchanged.
-      CL = -GLIDE_STEER_K * Math.sin(bank) * Math.cos(bank);
+      // sin(bank)·cos(bank): zero upright, growing symmetrically as she banks either way, sign carries
+      // the bank direction. GLIDE_STEER_SIGN chooses the convention (toggle with the 'B' key for A/B feel):
+      //   +1 = "lean the way you want to go" (bank RIGHT ⇒ curve RIGHT — like a plane / real wing / the
+      //        original baseline + true aero), -1 = "lean away" (bank LEFT ⇒ curve RIGHT).
+      CL = GLIDE_STEER_SIGN * GLIDE_STEER_K * Math.sin(bank) * Math.cos(bank);
     }
     const clk  = (mode === 'tower' ? CL_K * 1.35 : CL_K);   // keep the tower lift multiplier
     // BOOST crossrange in the glide phase (the "second third") so the tilt flies the booster a LONG
@@ -7615,6 +7618,12 @@ function handleKeyPress(k) {
       else if (mode === 'moon' && SHIP_MODE) edlFit = !edlFit;               // EDL: toggle ship-top/pad-bottom fit view
     }
     else if (k === 'r' || k === 'R') newRun(mode);
+    else if ((k === 'b' || k === 'B') && (mode === 'ocean' || mode === 'tower')) {
+      // A/B the glide bank-steer convention live so the pilot can pick by feel.
+      GLIDE_STEER_SIGN = -GLIDE_STEER_SIGN;
+      flashFx(GLIDE_STEER_SIGN > 0 ? 'GLIDE: lean INTO the turn (bank right -> curve right)'
+                                   : 'GLIDE: lean AWAY (bank left -> curve right)');
+    }
     else if (k === 'm' || k === 'M') { scene = 'menu'; silenceFlightAudio(); }
   } else if (scene === 'paused') {
     if (k === 'p' || k === 'P') scene = 'flying';
