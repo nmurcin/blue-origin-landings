@@ -447,11 +447,39 @@ const GLIDE_TRIM_K   = 0.15;  // attitude-spring stiffness (rad/s² per rad of e
 const GLIDE_TOP_Y    = 8300;  // m: glide phase begins below here (just under ENTRY_Y=8500) so the tilt
                               //   engages the INSTANT the decel burn ends — the whole "second third" of
                               //   the flight is the crossrange glide (per pilot). Gated by speed too.
-const GLIDE_FLOOR_Y  = 2100;  // m: below here the trim retargets to VERTICAL to set up the upright
+const GLIDE_FLOOR_Y  = 250;   // m: below here the trim retargets to VERTICAL to set up the upright
                               //   terminal landing burn. Between FLOOR and TOP = the heavy-tilt glide.
-                              //   LOWERED 2600→2100 to lengthen the coast/glide (pilot wants more time
-                              //   between the reentry burn and the landing burn); still ample room to
-                              //   straighten + land (the landing burn itself starts only a few hundred m up).
+                              //   LOWERED 830→250 (×6 HUD ≈ 5km→1.5km) per playtest to mimic the real NG
+                              //   booster, which only flips vertical ~100-250m above the landing ship. A
+                              //   VERY late, dramatic flip. 250m (not 100m) is the SAFE floor: at landing
+                              //   TWR ~1.82 (net decel ~8 m/s²) she needs ~99m to stop from 40 m/s and
+                              //   ~223m from 60 m/s — 250m leaves a survivable stopping margin. Lower risks
+                              //   an un-landable wash-out.
+// ===== EXPERIMENTAL: "AIM-THE-GLIDE-SLOPE" model (exp_glide_straightline.html only) =====
+// Instead of coaxing flat-plate lift into an arc, the glide holds a STRAIGHT flight-path toward a
+// commanded aim point on the surface, then flares to vertical over the pad. Banking sweeps the aim
+// point left/right (so a hard bank = a steep slanted line, upright = straight down). This decouples
+// "how dramatic the sweep is" from the flat-plate β curve that was weak/asymmetric.
+const EXP_STRAIGHTLINE   = true;   // master switch for the experiment
+const EXP_MAX_SLOPE      = 1.30;   // tan of the max flight-path angle off vertical at full bank
+                                   //    (±GLIDE_STALL_CAP). 1.30 ≈ 52° slant — a dramatic straight line;
+                                   //    bigger = shallower/longer sweep, smaller = steeper/tighter.
+const EXP_PATH_TRACK_K   = 2.2;    // 1/s: how hard vx is driven onto the commanded slope (bigger =
+                                   //    snappier onto the line; smaller = lazier, floatier).
+const EXP_LAT_CAP_G      = 3.0;    // g: gentle ceiling on the slope-controller's lateral accel so it
+                                   //    shapes the path smoothly and never brick-walls downrange
+                                   //    momentum at the decel→glide seam (was uncapped → -44 g bug).
+const EXP_FLARE_START_Y  = 750;    // m: ABOVE here the slope is held FULL → the descent line stays dead
+                                   //    straight through the whole upper/mid glide (no early curl).
+                                   //    LOWERED 1650→750 (×6 HUD ≈ 4.5km) so the straight line rides all the
+                                   //    way down close to the deck before it begins bending — a very late,
+                                   //    fast flip like the real NG booster.
+const EXP_FLARE_Y        = 250;    // m: flare COMPLETE (slope=0, fully vertical) by here — set to
+                                   //    GLIDE_FLOOR_Y (×6 HUD ≈ 1.5km) per playtest so she reaches vertical
+                                   //    only ~250m above the deck, mimicking the real NG landing. Between
+                                   //    FLARE_START_Y and FLARE_Y the slope eases via smoothstep (gentle
+                                   //    S-curve) so the straight line bends GRADUALLY into the vertical
+                                   //    drop over the deck instead of snapping.
 const GLIDE_ENTRY_SPD = 260;  // m/s: only enter the tilt once slowed below this (past the hot decel
                               //   regime, DECEL_SAFE_SPD=250) — above it we're still in the decel burn.
 // CROSSRANGE POWER in the glide phase (the flagship "second third"). Lift ∝ speed², so AFTER the decel
@@ -462,8 +490,10 @@ const GLIDE_ENTRY_SPD = 260;  // m/s: only enter the tilt once slowed below this
 const GLIDE_LIFT_BOOST = 1.8;  // ×lift during the post-burn glide. REDUCED 3.6→1.8: pilot found 3.6 (and
                                //   even ~2×) overpowering/floaty. With the deck moved closer (16k) less reach
                                //   is needed, so a gentler boost gives precise, controllable crossrange.
-const GLIDE_CLAMP_G    = 3.0;  // lift ceiling (×weight) during the glide only (5.0→3.0 to match the smaller
-                               //   boost); base LIFT_CLAMP_G applies everywhere else.
+const GLIDE_CLAMP_G    = 8.0;  // lift ceiling (×weight) during the glide only. RAISED 3.0→8.0 with the
+                               //   K=1.55 punch bump so NEITHER bank side pins the clamp — that keeps the
+                               //   crossrange force a clean ρ·v² (speed/air-density) law end-to-end instead
+                               //   of flattening to a ceiling. base LIFT_CLAMP_G still applies everywhere else.
 // GLIDE STEER RESHAPE — see the glide CL block in stepPhysics. The pilot reported the glide bank
 // "looks wrong": weak, asymmetric, and "bank harder = steer less". Root cause: the raw flat-plate
 // CL=½·sin(2β) peaks at β=45° then FALLS/reverses, and the down-right descent puts the neutral body
@@ -471,12 +501,20 @@ const GLIDE_CLAMP_G    = 3.0;  // lift ceiling (×weight) during the glide only 
 // and MONOTONIC (more bank ⇒ more steer) without touching the fast pre-burn regime, terminal, or mars/moon.
 const GLIDE_STALL_CAP  = 0.96; // rad (~55°): |bank| is clamped here so glide CL saturates at ~peak instead of
                                //   falling into stall — steering never gets WEAKER as the pilot banks harder.
-const GLIDE_STEER_K    = 0.90; // crossrange gain in the glide: steering coefficient off body-bank-from-vertical
+const GLIDE_STEER_K    = 1.55; // crossrange gain in the glide: steering coefficient off body-bank-from-vertical
                                //   so a lean visibly walks the touchdown. Judged via testing/wing_judge.py.
+                               //   BUMPED 0.90→1.55 (~+49% spread) per playtest "make it more dramatic" — the
+                               //   strongest gain that still grows both ways + stays reasonably symmetric
+                               //   (0.73); higher K saturates the left bank (flat-plate β past its lift peak).
 // Which way banking steers, A/B-toggleable live with the 'B' key so the pilot can pick by feel:
 //   +1 = "lean the way you want to go" (bank RIGHT => curve RIGHT — real-wing / aircraft / true-aero /
-//        original-baseline convention). -1 = "lean away" (bank LEFT => curve RIGHT).
-let GLIDE_STEER_SIGN = 1;      // default: real-wing (lean into the turn)
+//        original-baseline convention). -1 = "lean away" (bank LEFT => curve RIGHT — true flat-plate/
+//        wing behavior for a banked lifting surface: banking RIGHT deflects the flight path LEFT).
+// STRATEGY C1: default flipped to -1 so tilt-RIGHT visibly glides LEFT (matches real-wing bank-to-turn-
+// away-from-lean feel the pilot expects). The attitude-spring targetAng and the on-vehicle glide
+// guide's steer-direction mapping below are BOTH re-derived off this same GLIDE_STEER_SIGN so the
+// closed loop (auto-lean -> aero force -> guide instruction) stays self-consistent for either sign.
+let GLIDE_STEER_SIGN = -1;     // default: lean-away (bank RIGHT => curve LEFT)
 // WATCH-ME AUTOPILOT (built-in demo bot): press 'A' in flight to let the game fly itself so you can
 // watch a full controlled descent (decel burn -> glide steer to the deck -> terminal landing burn).
 // It drives the same `keys` a player uses, and publishes its phase for the AUTOPILOT-FLYING badge.
@@ -489,31 +527,25 @@ const ORB_RCS_ACC  = 0.9;     // rad/s^2 from RCS in space
 const ORB_RCS_DAMP = 0.7;     // 1/s gentle rate bleed → steady-state max ≈ 1.3 rad/s
 
 // ---------- REALISM TIERS ----------
-// One game, three physics fidelities selected on the menu. A tier is a PARAMETER SET, not a
-// separate file — applyModeParams() and newRun() read the active tier to scale the booster
-// entry regime, and the HUD reads dispAlt/dispSpd to show plausible real numbers.
-//   arcade   — original compressed arcade physics; HUD shows ×6 real-looking altitude/speed + Mach.
-//   moderate — believable separation regime (~26-32 km, ~Mach 1.5-2); HUD is already ~real, no scale.
-//   fullsim  — full real-scale entry (~65-70 km, hypersonic); real HUD. (Moderate/Full-Sim physics are
-//              WIRED + runnable but flagged "tuning in progress" — Arcade is the polished Milestone-1 tier.)
-// bAltMul/bSpdMul scale the BOOSTER (ocean/tower) spawn altitude+speed; entryY/hscale set the air onset;
-// dispAlt/dispSpd are HUD-only display multipliers so numbers read realistically without touching physics.
+// ARCADE-ONLY build. This was formerly a 3-tier realism picker (arcade/moderate/fullsim); the
+// moderate + full-sim tiers were removed per playtest — only the polished arcade physics ship.
+// A "tier" is just a PARAMETER SET read by applyModeParams()/newRun() (booster entry scaling) and
+// the HUD (dispAlt/dispSpd display multipliers). It's kept as a single frozen constant so the ~10
+// arcade read-sites (T().hscale, T().dispSpd, T().bAltMul, T().entryY …) need no changes.
+//   arcade — compressed arcade physics; HUD shows ×6 real-looking altitude/speed + Mach.
+// bAltMul/bSpdMul scale the BOOSTER (ocean/tower) spawn altitude+speed (1.0 = arcade); entryY/hscale
+// set the air onset; dispAlt/dispSpd are HUD-only display multipliers (physics untouched).
 const TIER = {
   arcade:   { name: 'ARCADE',    tuned: true,  dispAlt: 6.0, dispSpd: 6.0,
               bAltMul: 1.0, bSpdMul: 1.0, entryY: 8500,  hscale: 8500 },
-  moderate: { name: 'MODERATE',  tuned: false, dispAlt: 1.0, dispSpd: 1.0,
-              bAltMul: 2.7, bSpdMul: 3.0, entryY: 24000, hscale: 12000 },
-  fullsim:  { name: 'FULL SIM',  tuned: false, dispAlt: 1.0, dispSpd: 1.0,
-              bAltMul: 6.0, bSpdMul: 8.0, entryY: 70000, hscale: 8500 },
 };
-const TIER_ORDER = ['arcade', 'moderate', 'fullsim'];
-let tier = 'arcade';                 // active tier (set from save at boot / by the menu picker)
-function T() { return TIER[tier] || TIER.arcade; }   // active tier params
+const tier = 'arcade';               // single fixed tier (moderate/fullsim removed)
+function T() { return TIER.arcade; } // active tier params (arcade only)
 const SPEED_OF_SOUND = 340;          // m/s, for the displayed Mach number
 // RCS propellant bank per vehicle (a SEPARATE small pool from the main engine fuel). Steering
 // spends it; when it's dry, attitude control falls back to aero fins only. Sized to scale — the
 // small MK1 lander carries far less. (kg, game-tuned.)
-const RCS0 = { ocean: 600, tower: 700, mars: 2000, moon: 400 };  // MK1 ×25 (long Apollo approach needs more RCS)
+const RCS0 = { ocean: 1200, tower: 1400, mars: 2000, moon: 400 };  // EXP: booster RCS DOUBLED (600→1200, 700→1400) per playtest. MK1 ×25 (long Apollo approach needs more RCS)
 const RCS_BURN = 55;                 // kg/s spent while steering at full input — burns fast now
 
 function applyModeParams(m) {
@@ -557,7 +589,7 @@ function applyModeParams(m) {
     // THRUST 8.4e6 → MDOT = 8.4e6/(340·9.80665) = 2519 kg/s; landing TWR ≈ 3.1 at 280 t.
     G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
     ENTRY_Y = T().entryY; FLIP_Y = 3000;
-    DRY_MASS = 210000; FUEL0 = 90000;    // more fuel than 7×2 (heavier + faster entry needs it)
+    DRY_MASS = 210000; FUEL0 = 112500;   // more fuel than 7×2 (heavier + faster entry needs it); +25% (was 90000) per playtest — ran dry flying conservatively
     // Landing thrust: ≈2.5 BE-4 deeply throttled (~5 MN) → TWR ≈ 1.7 at 300t landing mass.
     // The heavier, faster 9×4 gets a slightly bigger landing cluster.
     THRUST = 5.0e6; MDOT = 1500;
@@ -570,7 +602,7 @@ function applyModeParams(m) {
     // controllable gameplay).
     G = 9.81; RHO0 = 1.225; HSCALE = T().hscale;
     ENTRY_Y = T().entryY; FLIP_Y = 3000;
-    DRY_MASS = 180000; FUEL0 = 70000;
+    DRY_MASS = 180000; FUEL0 = 87500;    // +25% (was 70000) per playtest — ran dry flying conservatively
     // Landing thrust: ≈2 BE-4 deeply throttled (~4.0 MN) → TWR ≈ 1.6 at landing mass.
     // A genuine suicide-burn feel — the old 7.4 MN was too powerful (instant stop).
     THRUST = 4.0e6; MDOT = 1200;
@@ -983,51 +1015,40 @@ window.addEventListener('resize', resize);
 resize();
 
 // ---------- Persistence ----------
-// Per-tier progress: bests + wins are tracked SEPARATELY for each realism tier. The flat fields
-// (bestOcean/bestTower/bestMars/oceanWins) always mirror the ACTIVE tier so the ~10 UI read-sites
-// need no changes; loadTierStats()/saveTierStats() copy in/out of save.tiers[tier], and switching
-// the tier re-syncs them. Old flat saves migrate into the 'arcade' tier on first load.
+// ARCADE-ONLY: progress (bests + wins) lives in the flat fields (bestOcean/bestTower/bestMars/
+// bestMoon/oceanWins). The old per-tier split (save.tiers{}) is gone; if an old save is present we
+// migrate the arcade tier's stored bests back up into the flat fields so nobody loses progress.
 function loadSave() {
   const def = { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0, bestMoon: 0,
-                pilot: null, referredBy: '', tier: 'arcade', tiers: {} };
+                pilot: null, referredBy: '' };
   let s;
   try { s = Object.assign(def, JSON.parse(localStorage.getItem('boosterDown') || '{}')); }
   catch (e) { s = def; }
-  if (!s.tiers) s.tiers = {};
-  // migrate a pre-tier save: seed the arcade tier from the old flat bests
-  if (!s.tiers.arcade && (s.bestOcean || s.bestTower || s.bestMars || s.bestMoon || s.oceanWins)) {
-    s.tiers.arcade = { oceanWins: s.oceanWins || 0, bestOcean: s.bestOcean || 0,
-                       bestTower: s.bestTower || 0, bestMars: s.bestMars || 0, bestMoon: s.bestMoon || 0 };
+  // migrate a legacy per-tier save: prefer the arcade tier's stored bests if they beat the flat ones
+  const at = s.tiers && s.tiers.arcade;
+  if (at) {
+    s.oceanWins = Math.max(s.oceanWins || 0, at.oceanWins || 0);
+    s.bestOcean = Math.max(s.bestOcean || 0, at.bestOcean || 0);
+    s.bestTower = Math.max(s.bestTower || 0, at.bestTower || 0);
+    s.bestMars  = Math.max(s.bestMars  || 0, at.bestMars  || 0);
+    s.bestMoon  = Math.max(s.bestMoon  || 0, at.bestMoon  || 0);
   }
+  delete s.tiers; delete s.tier;   // drop the dead tier fields
   return s;
 }
 const save = loadSave();
 function persist() { try { localStorage.setItem('boosterDown', JSON.stringify(save)); } catch (e) {} }
-// Copy the active tier's stored stats into the flat fields the UI reads (call after tier changes).
-function loadTierStats() {
-  const t = save.tiers[tier] || { oceanWins: 0, bestOcean: 0, bestTower: 0, bestMars: 0, bestMoon: 0 };
-  save.oceanWins = t.oceanWins || 0; save.bestOcean = t.bestOcean || 0;
-  save.bestTower = t.bestTower || 0; save.bestMars = t.bestMars || 0; save.bestMoon = t.bestMoon || 0;
-}
-// Write the flat fields back into the active tier's block, then persist.
-function saveTierStats() {
-  save.tiers[tier] = { oceanWins: save.oceanWins, bestOcean: save.bestOcean,
-                       bestTower: save.bestTower, bestMars: save.bestMars, bestMoon: save.bestMoon };
-  persist();
-}
-tier = save.tier || 'arcade';   // restore the picked tier
-loadTierStats();                // seed the flat fields for the active tier
-// Switch the active realism tier (from the menu picker): persist + re-sync per-tier stats.
-function setTier(t) {
-  if (!TIER[t] || t === tier) return;
-  tier = t; save.tier = t; loadTierStats(); persist();
-}
+// Kept as thin shims so the existing call-sites (boot + evalTouchdown) need no changes. In the
+// arcade-only build the flat fields ARE the store, so load is a no-op and save just persists.
+function loadTierStats() {}
+function saveTierStats() { persist(); }
+function setTier() {}   // no-op: only the arcade tier exists
 
 // ---------- Leaderboard / flight roster ----------
 const gateEl = document.getElementById('gate');
 const board = { entries: [], status: 'idle', offline: false };
-// Each realism tier keeps its own local leaderboard (separate localStorage key).
-function boardKey() { return 'boosterBoard_' + tier; }
+// Single local leaderboard (arcade-only build).
+function boardKey() { return 'boosterBoard_arcade'; }
 
 function localEntries() {
   let list = [];
@@ -1674,6 +1695,11 @@ let reentryDirAng = null;   // slewed reentry-director attitude (rad); null = re
 let glideMarkFrac = null;   // slewed localizer needle position (signed frac); null = re-seed
 let glideLockT = 0;         // seconds held on-track (debounced lock)
 let glidePrevShown = false; // was the localizer instrument drawn last frame (for hold-dim on forecast dropout)
+let glideGuideStyle = 0;    // glide-guidance UI variant, cycled live with the 'G' key (experiment —
+                            //   pick by feel): 0 = BANK TAPE (attitude-space tape + ideal-lean bug),
+                            //   1 = STEER ARROW (minimal bold chevrons), 2 = SLOPE VECTORS (live
+                            //   flight-path vector vs a dashed ghost line to the deck). NOT reset by
+                            //   newRun() so the chosen style persists across restarts this session.
 let ship = null;      // the Starship riding on top until stage separation
 let discard = null;   // jettisoned Super Heavy tumbling away after staging (moon)
 let env = null;       // per-run environment (wind)
@@ -2028,6 +2054,46 @@ function stepPhysics(s, dt, thr, tq) {
     // through zero on the other. Measured baseline (wing_judge.py): lean-20 +290 m vs lean+20 -547 m
     // (symmetry 0.53), and lean-30 steered LESS than lean-20 (over-bank stall). That is the weak/
     // asymmetric "bank harder ⇒ steer less" feel the pilot reported. FIX below.
+    if (EXP_STRAIGHTLINE && inGlide) {
+      // ===== EXPERIMENTAL "AIM-THE-GLIDE-SLOPE" =====  Bank commands the FLIGHT-PATH ANGLE (the slope
+      // of the descent line), not an aim point. A held bank ⇒ a CONSTANT slope ⇒ a straight ground
+      // track; the line lands wherever that slope carries it (so landing-X is monotonic in bank — more
+      // bank, farther sweep). Near the pad the commanded slope eases to zero ⇒ the straight line flares
+      // into a vertical drop for the upright landing.
+      //   slopeTan = (bank/STALL_CAP)·EXP_MAX_SLOPE·GLIDE_STEER_SIGN   (tan of the flight-path angle
+      //     off vertical). With GLIDE_STEER_SIGN=-1, banking RIGHT (ang>0) ⇒ negative slope ⇒ track goes
+      //     LEFT — the "bank one way, slide the other" wing feel already established.
+      //   vxT = (-vy)·slopeTan·flareEase   → horizontal speed that holds that slope; flareEase ramps the
+      //     slope to 0 below EXP_FLARE_Y so she stands vertical over the deck. A soft accel (∝ dynamic
+      //     pressure, so it's still an AERO effect that fades with speed/air-density per the request)
+      //     closes vx onto vxT.
+      let bank = s.ang;
+      if (bank >  GLIDE_STALL_CAP) bank =  GLIDE_STALL_CAP;
+      else if (bank < -GLIDE_STALL_CAP) bank = -GLIDE_STALL_CAP;
+      // Slope held FULL above EXP_FLARE_START_Y (straight line), then eased to 0 by EXP_FLARE_Y via a
+      // smoothstep so the bend into vertical is GRADUAL (S-curve, zero slope-rate at both ends).
+      let fe = (s.y - EXP_FLARE_Y) / (EXP_FLARE_START_Y - EXP_FLARE_Y);
+      fe = fe < 0 ? 0 : fe > 1 ? 1 : fe;
+      const flareEase = fe * fe * (3 - 2 * fe);              // smoothstep(0..1): gentle in AND out
+      const slopeTan  = (bank / GLIDE_STALL_CAP) * EXP_MAX_SLOPE * GLIDE_STEER_SIGN * flareEase;
+      const vdown = Math.max(20, -s.vy);                       // |descent rate|
+      const vxT   = vdown * slopeTan;                          // horizontal speed that holds the commanded slope
+      // dynamic-pressure gain (keeps it an aero, speed/ρ-dependent effect that fades as she slows/thins)
+      const qGain = Math.min(1.6, (r / RHO0) * (spdS * spdS) / (140 * 140));
+      // SEAM-SAFE RAMP: at the decel→glide handoff the booster is still fast (~GLIDE_ENTRY_SPD) and
+      // carrying big downrange vx; without this the controller would yank vx→vxT at tens of g — a
+      // brick-wall brake that corrupted the reentry-burn transition. Ease the authority in as she
+      // slows BELOW entry speed (0 at the seam, full by ~120 m/s) so the handoff is smooth.
+      const spdEase = Math.min(1, Math.max(0, (GLIDE_ENTRY_SPD - spdS) / (GLIDE_ENTRY_SPD - 120)));
+      let axCmd = (vxT - s.vx) * EXP_PATH_TRACK_K * qGain * spdEase;
+      // CLAMP to a gentle aero-realistic lateral limit so the controller SHAPES the path instead of
+      // brick-walling it. ~3 g is plenty to fly the slope but soft enough that the decel→glide handoff
+      // and any hard bank feel like aero, not a wall. (Lower than the flat-plate GLIDE_CLAMP_G, which
+      // rarely bound; this controller would otherwise sit saturated.)
+      const axCap = EXP_LAT_CAP_G * G;                         // m/s² ceiling on the controller
+      if (axCmd >  axCap) axCmd =  axCap; else if (axCmd < -axCap) axCmd = -axCap;
+      ax += axCmd;
+    } else {
     if (inGlide) {
       // Drive the glide steer off the pilot's BODY BANK FROM VERTICAL (s.ang), NOT the geometric β.
       // Bank-from-vertical is exactly what the pilot commands, so steering on it is naturally
@@ -2062,6 +2128,7 @@ function stepPhysics(s, dt, thr, tq) {
     const fvx = rvx / spdS, fvy = rvy / spdS;
     ax += Math.abs(Flift) * GLIDE_K * fvx / m;
     ay += Math.abs(Flift) * GLIDE_K * fvy / m;
+    }
   }
 
   // rotation: player torque (+gimbal when burning), aero damping.
@@ -2093,13 +2160,23 @@ function stepPhysics(s, dt, thr, tq) {
     //     The pilot fine-steers ± around this trim.
     //   • below GLIDE_FLOOR_Y → back to the vertical weathercock to stand her up for the landing burn.
     // (inGlide computed once near the top of stepPhysics — shared with the crossrange lift boost.)
-    if (inGlide) {
-      // Target body attitude: GLIDE_LEAN rad from vertical, toward the deck. ang uses the body-axis
-      // (sin,cos) convention (ang=0 = nose up); a POSITIVE ang leans the nose toward +x (downrange,
-      // deck side) which puts the belly to the flow and throws lift downrange (sign verified). Lean
-      // toward whichever side the deck is on so the glide always carries toward Jacklyn.
+    if (EXP_STRAIGHTLINE && inGlide) {
+      // EXPERIMENTAL: the body does NOT hold a fixed belly-flop lean — it's the pilot's control input.
+      // We add only a LIGHT self-centering toward upright so that a released stick eases the aim line
+      // back toward straight-down (the neutral glide slope), while the pilot's active bank still sweeps
+      // it. No target-toward-deck spring here (the flight-path controller above owns where she goes).
+      const dA = shortestAngleDifference(0, s.ang);           // gently toward upright (neutral slope)
+      aacc += (GLIDE_TRIM_K * 0.45) * dA * atmoT;             // weak centering — pilot bank dominates
+    } else if (inGlide) {
+      // Target body attitude: GLIDE_LEAN rad from vertical. Which SIDE to lean toward depends on
+      // GLIDE_STEER_SIGN (STRATEGY C1: re-derived off the same sign the crossrange-lift block uses,
+      // so the closed loop stays coherent): GLIDE_STEER_SIGN=+1 ("lean into the turn") leans the nose
+      // TOWARD the deck side (that lean's CL then throws lift toward the deck). GLIDE_STEER_SIGN=-1
+      // ("lean away", our new default) leans the nose AWAY from the deck side — because with the sign
+      // flipped, THAT lean is the one whose CL throws lift toward the deck. Either way the auto-lean
+      // trim always converges the glide toward Jacklyn.
       const deckSide = (deckX() >= s.x) ? 1 : -1;
-      const targetAng = GLIDE_LEAN * deckSide;
+      const targetAng = GLIDE_LEAN * deckSide * GLIDE_STEER_SIGN;
       const dA = shortestAngleDifference(targetAng, s.ang);   // shortest-arc error (no ±π-seam jump)
       aacc += GLIDE_TRIM_K * dA * atmoT;               // attitude spring (rate damping handled above)
     } else {
@@ -4587,9 +4664,12 @@ function drawReentryGuide() {
     const p2x = gx + Math.cos(ga + s * 0.5) * br * 1.7, p2y = gy2 + Math.sin(ga + s * 0.5) * br * 1.7;
     ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(gx, gy2); ctx.lineTo(p2x, p2y); ctx.stroke();
   }
-  // label: attitude cue on top, burn-timing readout below.
+  // label: attitude cue OFF TO THE SIDE of the booster (was centered on the director tip, where it
+  // stacked on top of the burn-timing readout per playtest). Anchored to the LEFT of the body (the
+  // clear side — the director arrow points down-and-downrange to the right), right-aligned so it
+  // hugs the booster. The burn-timing readout stays at the arrow tip below.
   const msg = aligned ? 'ENGINES INTO THE WIND ✓' : 'POINT ENGINES INTO THE WIND';
-  hudText(msg, gx, gy2 - px(26), 10, col, 'center');
+  hudText(msg, bsx - px(58), bsy - px(2), 10, col, 'right');
   // Burn-timing readout — the two things the pilot asked for:
   //   (a) BEFORE the burn: a countdown "DECEL BURN IN X.Xs" to the recommended start.
   //   (b) DURING the burn: "HOLD BURN — X.Xs" remaining until speed is bled off.
@@ -4612,27 +4692,42 @@ function drawReentryGuide() {
     bt = 'DECEL BURN IN ' + startIn.toFixed(1) + 's';
     btcol = startIn < 3 ? '#ff5040' : startIn < 8 ? '#ffb14a' : '#e8b93c';
   } else {
-    bt = 'STAND BY TO BURN'; btcol = '#e8b93c';
+    bt = ''; btcol = '#e8b93c';   // no timing cue yet — used to read 'STAND BY TO BURN' (removed per playtest)
   }
-  hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
+  if (bt) hudText(bt, gx, gy2 - px(14), 11, btcol, 'center');
   ctx.restore();
 }
-// On-vehicle GLIDE LOCALIZER — the glide-phase counterpart to drawReentryGuide. FULLY ACTIONABLE with
-// the deck AND the ✕ predictor OFF-SCREEN (they almost always are up here): references NOTHING
-// off-screen. Driven by the single scalar miss = deckX() - predictTrajectory().last.x (+ = landing
-// SHORT/left-of-deck, - = LONG). Rendered as an aircraft-ILS-style LOCALIZER fixed on the booster:
-//   • a horizontal SCALE with a permanent center notch (the deck) and a green DETENT CORRIDOR whose
-//     half-width = the 250 m deadband — a spatially-literal "on track" box you fly the needle into,
-//   • a single DEVIATION NEEDLE (triangle + stem) on the SAME side you must push (chase convention),
-//     damped so it glides instead of twitching when the forecast wobbles,
-//   • ONE bold text line (verb + distance); a debounced LOCKED chip only after ~0.6 s on track.
-// Steer sign verified vs stepPhysics: ArrowRight → +b.ang → lift downrange → lands further right, so a
-// SHORT miss (miss>0) is cured by steering RIGHT and the needle deflects RIGHT — fly it back to center.
-const GLIDE_TAPE_FULL = 3000;   // m: miss magnitude that saturates the needle (signed-sqrt compress)
+// On-vehicle GLIDE BANK TAPE — reinvented glide guide (replaces the old ILS localizer). Instead of
+// flying an abstract needle in MISS-space, you fly your BANK MARKER to an IDEAL-LEAN BUG in
+// ATTITUDE-space — and attitude is exactly what you SEE the rocket doing, so the tilt, the tape, and
+// the resulting glide direction all agree. It reinforces the corrected physics (GLIDE_STEER_SIGN=-1,
+// "bank one way → slide the other, like a wing"):
+//   • a horizontal BANK SCALE centered on UPRIGHT (0°), spanning ±GLIDE_STALL_CAP, with an upright
+//     center notch and tick marks; left third = bank LEFT, right third = bank RIGHT.
+//   • a live "YOU" marker at the booster's ACTUAL bank b.ang (no smoothing — it IS the truth you see).
+//   • an IDEAL-LEAN BUG (chevron + soft band) you chase: the bank that cures the current landing miss.
+//     Smoothed so it glides instead of twitching. When you overlap it and hold, you LOCK.
+//   • ‹‹‹ / ›››  arrows on the side you must bank toward, + ONE verb line, + a teaching sub-line that
+//     spells out the inverted push ("lean LEFT → slide RIGHT") so the aero convention is unmistakable.
+// Sign law (all derived off GLIDE_STEER_SIGN so a 'B' toggle flips the whole instrument coherently):
+//   landing shift ≈ GLIDE_STEER_SIGN · f(bank).  miss = deckX − predicted landing x  (+ = SHORT, need
+//   landing further +x).  To move the landing +x you need bankΔ of sign (sign(miss)·GLIDE_STEER_SIGN).
+//   With GLIDE_STEER_SIGN=-1: a SHORT miss (miss>0) is cured by banking LEFT (ang<0) — and the drawn
+//   left tilt then throws the path RIGHT toward the deck, matching what the pilot sees.
+const GLIDE_TAPE_FULL = 3000;   // m: miss magnitude that saturates the ideal-lean bug offset (signed-sqrt)
 const GLIDE_DEADBAND  = 250;    // m: within this, "ON TRACK" — terminal landing burn absorbs the rest
-const GLIDE_MARK_SLEW = 0.25;   // per-frame low-pass toward the needle target (damped, jitter-immune)
-const GLIDE_LOCK_HOLD = 0.6;    // s on-track before the LOCKED chip latches (debounces a 1-frame blip)
+const GLIDE_MARK_SLEW = 0.22;   // per-frame low-pass toward the bug target (damped, jitter-immune)
+const GLIDE_LOCK_HOLD = 0.6;    // s on-bug before the LOCKED chip latches (debounces a 1-frame blip)
+const GLIDE_BANK_MAX  = GLIDE_STALL_CAP;   // rad: tape half-span (±~55°); ideal lean (~30°) sits ~0.54 out
+// Dispatcher: route to the active glide-guidance STYLE (cycle live with 'G'). Each renderer is
+// self-contained (they recompute the one scalar `miss` themselves) so the styles can be compared
+// A/B/C without any shared-state coupling — and style 0 stays byte-for-byte the shipped tape.
 function drawGlideGuide() {
+  if (glideGuideStyle === 1) return drawGlideGuide_arrow();
+  if (glideGuideStyle === 2) return drawGlideGuide_slope();
+  return drawGlideGuide_tape();
+}
+function drawGlideGuide_tape() {
   if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
   const spd = Math.hypot(b.vx, b.vy);
   // same band the physics auto-lean uses (GLIDE_* consts) + a small display margin.
@@ -4642,11 +4737,10 @@ function drawGlideGuide() {
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
   const ax = bsx, ay = bsy - px(10);                 // anchor (lifted off the booster)
   const straightenUp = b.y < (GLIDE_FLOOR_Y + 200);  // near the floor → cue the transition to vertical
-  const leaned = Math.abs(b.ang) > (GLIDE_LEAN - 0.21);   // has she settled into the glide lean yet
   const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
-  const STEER = MOBILE ? 'steer' : '';
-  const HW = px(60), ty = ay + px(20);
-  const detentFrac = Math.sqrt(GLIDE_DEADBAND / GLIDE_TAPE_FULL);   // corridor half-width on the scale (~0.29)
+  const HW = px(64), ty = ay + px(22);
+  const clampF = (v) => v < -1 ? -1 : v > 1 ? 1 : v;
+  const youFrac = clampF(b.ang / GLIDE_BANK_MAX);    // live bank marker position on the tape
 
   ctx.save();
 
@@ -4667,91 +4761,255 @@ function drawGlideGuide() {
     if (last && traj.length >= 2 && last.y <= 50) miss = deckX() - last.x;   // + = SHORT, - = LONG
   } catch (e) { miss = null; }
 
-  // Helper: draw the localizer rail + detent corridor + SHORT/LONG labels. greenFill 0..1 ramps the
-  // corridor fill as the lock timer builds.
-  const drawRail = (greenFill) => {
+  // Helper: draw the bank scale — center upright notch + ± tick marks + LEFT/RIGHT bank labels.
+  const drawTape = () => {
     ctx.strokeStyle = 'rgba(140,160,175,0.5)'; ctx.lineWidth = px(3); ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(ax - HW, ty); ctx.lineTo(ax + HW, ty); ctx.stroke();
-    // detent corridor (the "deck box"): two green posts + translucent fill
-    const dw = detentFrac * HW;
-    if (greenFill > 0) { ctx.fillStyle = 'rgba(88,214,141,' + (0.12 + 0.33 * greenFill).toFixed(3) + ')'; ctx.fillRect(ax - dw, ty - px(5), dw * 2, px(10)); }
-    ctx.strokeStyle = 'rgba(88,214,141,0.9)'; ctx.lineWidth = px(2);
-    for (const t of [-dw, dw]) { ctx.beginPath(); ctx.moveTo(ax + t, ty - px(5)); ctx.lineTo(ax + t, ty + px(5)); ctx.stroke(); }
-    // center notch (the deck itself)
-    ctx.strokeStyle = 'rgba(200,220,235,0.8)'; ctx.lineWidth = px(1);
-    ctx.beginPath(); ctx.moveTo(ax, ty - px(4)); ctx.lineTo(ax, ty + px(4)); ctx.stroke();
-    hudText('SHORT', ax - HW - px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'right');
-    hudText('LONG', ax + HW + px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'left');
+    // graduation ticks at ±1/3, ±2/3 of the span
+    ctx.strokeStyle = 'rgba(150,165,180,0.45)'; ctx.lineWidth = px(1);
+    for (const f of [-0.66, -0.33, 0.33, 0.66]) { const tx = ax + f * HW; ctx.beginPath(); ctx.moveTo(tx, ty - px(3)); ctx.lineTo(tx, ty + px(3)); ctx.stroke(); }
+    // UPRIGHT center notch (the goal for the terminal transition)
+    ctx.strokeStyle = 'rgba(200,220,235,0.85)'; ctx.lineWidth = px(1.5);
+    ctx.beginPath(); ctx.moveTo(ax, ty - px(6)); ctx.lineTo(ax, ty + px(6)); ctx.stroke();
+    hudText('◄ BANK L', ax - HW - px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'right');
+    hudText('BANK R ►', ax + HW + px(4), ty + px(3), 7, 'rgba(150,165,180,0.8)', 'left');
   };
 
-  // ENTERING / SETTLING, or no PRIOR reading yet → invite the lean, preview the empty corridor.
-  if ((miss === null && glideMarkFrac === null) || !leaned) {
-    hudText('GLIDE — TRIM THE LANDING IN', ax, ay - px(20), 10, '#7cc4ff', 'center');
-    hudText('lean to steer' + (STEER ? '  (' + STEER + ')' : '  (← →)'), ax, ay - px(8), 9, '#7cc4ff', 'center');
-    drawRail(0);
+  // Helper: draw the live YOU bank marker (a filled ▲ riding under the tape at the current lean).
+  const drawYou = (col) => {
+    const yx = ax + youFrac * HW;
+    ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = px(2);
+    ctx.beginPath(); ctx.moveTo(yx, ty + px(2)); ctx.lineTo(yx - px(5), ty + px(9)); ctx.lineTo(yx + px(5), ty + px(9)); ctx.closePath(); ctx.fill();
+  };
+
+  // ENTERING / SETTLING, or no PRIOR reading yet → show the tape + live bank, invite the lean.
+  if (miss === null && glideMarkFrac === null) {
+    hudText('GLIDE — BANK TO STEER', ax, ay - px(20), 10, '#7cc4ff', 'center');
+    hudText('lean to bank · fly ▲ to the bug', ax, ay - px(8), 9, '#7cc4ff', 'center');
+    drawTape(); drawYou('#7cc4ff');
     glidePrevShown = false;
     ctx.restore();
     return;
   }
 
-  // HOLD-DIM: forecast dropped out this frame but we have a prior needle → hold it, dim to 55%, no thrash.
+  // HOLD-DIM: forecast dropped out this frame but we have a prior bug → hold it, dim to 55%, no thrash.
   let holdAlpha = 1;
-  if (miss === null) { holdAlpha = 0.55; }
+  if (miss === null) holdAlpha = 0.55;
 
-  // When we have a live miss, update targets + the debounced lock timer.
-  let amiss, dir, frac, onTrack, col;
+  // Compute the IDEAL-LEAN BUG (target bank frac) + lock timer from the live miss.
+  let amiss, corrDir, onTrack, col;
   if (miss !== null) {
     amiss = Math.abs(miss);
-    dir = Math.sign(miss) || 1;                       // +1 = short = steer RIGHT; -1 = long = steer LEFT
-    frac = Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));
     onTrack = amiss <= GLIDE_DEADBAND;
+    // direction to bank to cure the miss (see sign law in the header): sign(miss)·GLIDE_STEER_SIGN.
+    corrDir = (Math.sign(miss) || 1) * GLIDE_STEER_SIGN;   // +1 = bank RIGHT, -1 = bank LEFT
     col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
     glideLockT = onTrack ? Math.min(GLIDE_LOCK_HOLD + 0.5, glideLockT + 0.016) : 0;
-    // slew the needle toward its signed target (chase side); seed on first reading.
-    const target = dir * frac;
+    // Bug = your current bank + a correction offset in the cure direction (∝ √miss), clamped to the
+    // tape. On track it converges onto YOU (overlap = hold). This is a relative chase bug: fly ▲ to it.
+    const offset = onTrack ? 0 : corrDir * Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));
+    const target = clampF(youFrac + offset);
     if (glideMarkFrac === null) glideMarkFrac = target;
     else glideMarkFrac += (target - glideMarkFrac) * GLIDE_MARK_SLEW;
   } else {
-    // held reading — recolor from the held needle position (no lock advance)
-    const held = glideMarkFrac;
-    const heldMiss = Math.sign(held) * (held * held) * GLIDE_TAPE_FULL;
-    amiss = Math.abs(heldMiss); dir = Math.sign(held) || 1;
-    frac = Math.min(1, Math.abs(held)); onTrack = amiss <= GLIDE_DEADBAND;
-    col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+    // held reading — recolor from how far the held bug sits from YOU (no lock advance)
+    const gap = Math.abs((glideMarkFrac - youFrac));
+    onTrack = gap < 0.06; corrDir = Math.sign(glideMarkFrac - youFrac) || 1;
+    amiss = gap * GLIDE_TAPE_FULL;   // rough, display-only
+    col = onTrack ? '#58d68d' : gap < 0.35 ? '#e8b93c' : gap < 0.6 ? '#ffb14a' : '#ff5040';
   }
   const locked = onTrack && glideLockT >= GLIDE_LOCK_HOLD;
-  const pinned = frac >= 0.999;
 
   ctx.globalAlpha = holdAlpha;
-  drawRail(Math.min(1, glideLockT / GLIDE_LOCK_HOLD));
+  drawTape();
 
-  // DEVIATION NEEDLE — triangle + stem at the slewed position; on the side you must push.
-  const mx = ax + Math.max(-1, Math.min(1, glideMarkFrac)) * HW;
+  // IDEAL-LEAN BUG — a soft target band + a downward chevron pointing at the tape from above.
+  const bx = ax + clampF(glideMarkFrac) * HW;
+  ctx.fillStyle = 'rgba(88,214,141,' + (0.10 + 0.30 * Math.min(1, glideLockT / GLIDE_LOCK_HOLD)).toFixed(3) + ')';
+  ctx.fillRect(bx - px(5), ty - px(7), px(10), px(14));
   ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(mx, ty - px(11)); ctx.lineTo(mx, ty - px(3)); ctx.stroke();   // stem
-  if (pinned) {
-    // hollow OUTWARD chevron + red rail-end cap = "keep steering", not "arrived"
-    ctx.beginPath();
-    ctx.moveTo(mx - dir * px(6), ty - px(9)); ctx.lineTo(mx + dir * px(2), ty - px(4)); ctx.lineTo(mx - dir * px(6), ty + px(1));
-    ctx.stroke();
-    ctx.fillRect(ax + dir * HW - (dir > 0 ? px(3) : 0), ty - px(6), px(3), px(12));
-  } else {
-    ctx.beginPath(); ctx.moveTo(mx, ty + px(1)); ctx.lineTo(mx - px(5), ty - px(6)); ctx.lineTo(mx + px(5), ty - px(6)); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(bx, ty - px(3)); ctx.lineTo(bx - px(5), ty - px(11)); ctx.lineTo(bx + px(5), ty - px(11)); ctx.closePath(); ctx.fill();  // chevron ▼ over the tape
+
+  // live YOU marker on top (its own color: green when overlapping the bug, else white)
+  drawYou(locked ? '#58d68d' : onTrack ? '#8fe' : '#eef4f9');
+
+  // Directional arrows on the side you must bank toward (only when off track).
+  if (!onTrack && corrDir !== 0) {
+    const arrows = corrDir > 0 ? '›››' : '‹‹‹';
+    const axr = corrDir > 0 ? ax + HW + px(16) : ax - HW - px(16);
+    hudText(arrows, axr, ty + px(3), 11, col, 'center');
   }
 
-  // ONE bold text line (verb + distance); direction carried by the deflected needle + rail labels.
-  let msg;
-  if (locked)        msg = 'LOCKED — walking onto Jacklyn';
-  else if (onTrack)  msg = 'ON TRACK ✓  hold it';
-  else if (dir > 0)  msg = 'STEER RIGHT' + (STEER ? '' : ' →') + '  ·  SHORT ' + (pinned ? '>' : '') + fmt(amiss);
-  else               msg = 'STEER LEFT' + (STEER ? '' : ' ←') + '  ·  LONG ' + (pinned ? '>' : '') + fmt(amiss);
-  hudText(msg, ax, ay - px(12), 11, col, 'center');
-  if (locked) hudText('LOCKED', ax, ty + px(15), 7, '#58d68d', 'center');
-  else if (miss === null) hudText('reading settling', ax, ty + px(15), 7, 'rgba(150,165,180,0.8)', 'center');
+  // ONE bold verb line + a teaching sub-line that makes the inverted (wing-like) push explicit.
+  let msg, sub;
+  if (locked) {
+    msg = 'LOCKED — walking onto Jacklyn';
+    sub = 'hold this bank';
+  } else if (onTrack) {
+    msg = 'ON TRACK ✓  hold the lean';
+    sub = 'ease upright near the deck';
+  } else {
+    const bankWord = corrDir > 0 ? 'BANK RIGHT' : 'BANK LEFT';
+    const missWord = miss !== null ? (miss > 0 ? 'SHORT ' + fmt(amiss) : 'LONG ' + fmt(amiss)) : '';
+    msg = bankWord + '  ·  ' + missWord;
+    // TEACHING sub-line — states the WING INVERSION explicitly: the landing slides the OPPOSITE way
+    // from the bank (GLIDE_STEER_SIGN=-1). bank RIGHT → path curves LEFT, bank LEFT → path curves
+    // RIGHT. Verified in Python: this cued bank is exactly the one that walks the landing to the deck.
+    sub = '(bank ' + (corrDir > 0 ? 'right' : 'left') + ' → slides ' + (corrDir > 0 ? 'LEFT' : 'RIGHT') + ')';
+  }
+  hudText(msg, ax, ay - px(13), 11, col, 'center');
+  hudText(sub, ax, ay - px(2), 8.5, onTrack ? '#8fbf9f' : 'rgba(180,196,210,0.85)', 'center');
 
   ctx.globalAlpha = 1;
   glidePrevShown = true;
   ctx.restore();
+}
+
+// STYLE 1 — STEER ARROW: the minimal, bold alternative to the tape. No scale, no bug to chase — just
+// a big stack of chevrons pointing the way you must BANK, growing + reddening with the miss, plus one
+// verb line + the distance and the wing-inversion teaching sub-line. Green ✓ / LOCKED when on track.
+function drawGlideGuide_arrow() {
+  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
+  const spd = Math.hypot(b.vx, b.vy);
+  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
+  if (!inGlide) { glidePrevShown = false; return; }
+  const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
+  const ax = bsx, ay = bsy - px(10);
+  const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+  ctx.save();
+
+  // STRAIGHTEN override (shared cue across all styles): near the floor, stand up for the burn.
+  if (b.y < (GLIDE_FLOOR_Y + 200)) {
+    hudText('STRAIGHTEN UP FOR LANDING', ax, ay - px(20), 10, '#e8b93c', 'center');
+    hudText('ease vertical, ready the landing burn', ax, ay - px(8), 9, '#e8b93c', 'center');
+    glidePrevShown = false; ctx.restore(); return;
+  }
+
+  // The one scalar (guard against a not-yet-grounded forecast).
+  let miss = null;
+  try {
+    const traj = predictTrajectory();
+    const last = traj && traj.length ? traj[traj.length - 1] : null;
+    if (last && traj.length >= 2 && last.y <= 50) miss = deckX() - last.x;   // + = SHORT, - = LONG
+  } catch (e) { miss = null; }
+
+  if (miss === null) {
+    hudText('GLIDE — BANK TO STEER', ax, ay - px(18), 10, '#7cc4ff', 'center');
+    hudText('lean to steer (← →)', ax, ay - px(6), 9, '#7cc4ff', 'center');
+    glidePrevShown = false; ctx.restore(); return;
+  }
+
+  const amiss = Math.abs(miss);
+  const onTrack = amiss <= GLIDE_DEADBAND;
+  const corrDir = (Math.sign(miss) || 1) * GLIDE_STEER_SIGN;   // +1 = bank RIGHT, -1 = bank LEFT
+  const col = onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+  glideLockT = onTrack ? Math.min(GLIDE_LOCK_HOLD + 0.5, glideLockT + 0.016) : 0;
+  const locked = onTrack && glideLockT >= GLIDE_LOCK_HOLD;
+
+  if (onTrack) {
+    hudText(locked ? 'LOCKED — walking onto Jacklyn' : 'ON TRACK ✓  hold the lean', ax, ay - px(12), 11, col, 'center');
+    // a centered check mark below the text
+    ctx.strokeStyle = col; ctx.lineWidth = px(3.5); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(ax - px(9), ay + px(6)); ctx.lineTo(ax - px(2), ay + px(13)); ctx.lineTo(ax + px(11), ay - px(3)); ctx.stroke();
+    ctx.restore(); glidePrevShown = true; return;
+  }
+
+  // OFF TRACK — verb + distance on top, teaching sub-line, then a row of big chevrons pointing the
+  // way to bank (centered under the text, size + weight scale with the miss urgency).
+  const dir = corrDir;
+  const missWord = miss > 0 ? 'SHORT ' + fmt(amiss) : 'LONG ' + fmt(amiss);
+  hudText((dir > 0 ? 'BANK RIGHT' : 'BANK LEFT') + '  ·  ' + missWord, ax, ay - px(20), 11, col, 'center');
+  hudText('(bank ' + (dir > 0 ? 'right' : 'left') + ' → slides ' + (dir > 0 ? 'LEFT' : 'RIGHT') + ')',
+          ax, ay - px(9), 8.5, 'rgba(180,196,210,0.85)', 'center');
+  const cy = ay + px(12);
+  const grow = Math.min(1, Math.sqrt(amiss / GLIDE_TAPE_FULL));   // 0..1 urgency
+  const s = px(9 + 7 * grow);
+  ctx.strokeStyle = col; ctx.lineWidth = px(3 + 1.5 * grow); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (let i = -1; i <= 1; i++) {
+    const ox = ax + dir * (i * s * 1.15 + s * 0.2);
+    ctx.beginPath();
+    ctx.moveTo(ox - dir * s * 0.55, cy - s); ctx.lineTo(ox + dir * s * 0.55, cy); ctx.lineTo(ox - dir * s * 0.55, cy + s);
+    ctx.stroke();
+  }
+  ctx.restore(); glidePrevShown = true;
+}
+
+// STYLE 2 — SLOPE VECTORS: the spatial alternative. Draws the booster's live FLIGHT-PATH vector
+// (a solid line + ring marker, where she's ACTUALLY heading) and a dashed GHOST line toward Jacklyn
+// (where you WANT to head); you bank to swing the solid vector onto the ghost. Because banking
+// commands the descent slope, the vector visibly swings as you lean — so the wing inversion is
+// SEEN, not just told (bank LEFT → the velocity vector swings RIGHT, toward the deck). Colored off
+// the real landing miss so it stays honest with the physics.
+function drawGlideGuide_slope() {
+  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
+  const spd = Math.hypot(b.vx, b.vy);
+  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
+  if (!inGlide) { glidePrevShown = false; return; }
+  const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
+  const ay = bsy - px(10);
+  const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+  ctx.save();
+
+  if (b.y < (GLIDE_FLOOR_Y + 200)) {
+    hudText('STRAIGHTEN UP FOR LANDING', bsx, ay - px(20), 10, '#e8b93c', 'center');
+    hudText('ease vertical, ready the landing burn', bsx, ay - px(8), 9, '#e8b93c', 'center');
+    glidePrevShown = false; ctx.restore(); return;
+  }
+
+  let miss = null;
+  try {
+    const traj = predictTrajectory();
+    const last = traj && traj.length ? traj[traj.length - 1] : null;
+    if (last && traj.length >= 2 && last.y <= 50) miss = deckX() - last.x;   // + = SHORT, - = LONG
+  } catch (e) { miss = null; }
+
+  // GHOST target: screen direction from the booster toward the deck at the surface. World vector to
+  // deck = (deckX()-b.x, -b.y); a world (Δx,Δy) maps to screen (Δx, -Δy), so screen dir = (deckX()-b.x, b.y).
+  let gdx = deckX() - b.x, gdy = b.y;
+  const glen = Math.hypot(gdx, gdy) || 1; gdx /= glen; gdy /= glen;
+  // FLIGHT-PATH: screen direction along velocity. World (vx,vy) → screen (vx, -vy).
+  let fdx = b.vx, fdy = -b.vy;
+  const flen = Math.hypot(fdx, fdy) || 1; fdx /= flen; fdy /= flen;
+
+  const onTrack = miss !== null && Math.abs(miss) <= GLIDE_DEADBAND;
+  const amiss = miss === null ? 0 : Math.abs(miss);
+  const col = miss === null ? '#7cc4ff'
+            : onTrack ? '#58d68d' : amiss < 1500 ? '#e8b93c' : amiss < 2600 ? '#ffb14a' : '#ff5040';
+  glideLockT = (miss !== null && onTrack) ? Math.min(GLIDE_LOCK_HOLD + 0.5, glideLockT + 0.016) : 0;
+  const locked = onTrack && glideLockT >= GLIDE_LOCK_HOLD;
+
+  // dashed GHOST line to the deck (the slope to fly) + a hollow ring at its tip ("aim here").
+  const GL = px(84);
+  const gtx = bsx + gdx * GL, gty = bsy + gdy * GL;
+  ctx.strokeStyle = miss === null ? 'rgba(124,196,255,0.7)' : onTrack ? 'rgba(88,214,141,0.9)' : 'rgba(150,180,210,0.7)';
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = px(2); ctx.setLineDash([px(5), px(5)]); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(bsx, bsy); ctx.lineTo(gtx, gty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(gtx, gty, px(4), 0, Math.PI * 2); ctx.stroke();
+
+  // solid FLIGHT-PATH vector (where she's actually going) + a filled ring marker at its tip.
+  const FL = px(64);
+  const ftx = bsx + fdx * FL, fty = bsy + fdy * FL;
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = px(3); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(bsx, bsy); ctx.lineTo(ftx, fty); ctx.stroke();
+  ctx.beginPath(); ctx.arc(ftx, fty, px(5), 0, Math.PI * 2); ctx.fill();
+  // little wings on the marker so it reads as a flight-path/velocity symbol
+  ctx.beginPath(); ctx.moveTo(ftx - px(10), fty); ctx.lineTo(ftx - px(6), fty); ctx.moveTo(ftx + px(6), fty); ctx.lineTo(ftx + px(10), fty); ctx.stroke();
+
+  // text block above the booster.
+  let msg, sub;
+  if (miss === null)   { msg = 'GLIDE — FLY THE ● TO THE ○'; sub = 'lean to swing it (← →)'; }
+  else if (locked)     { msg = 'LOCKED — walking onto Jacklyn'; sub = 'hold this lean'; }
+  else if (onTrack)    { msg = 'ON TRACK ✓  vector on the line'; sub = 'ease upright near the deck'; }
+  else {
+    const corrDir = (Math.sign(miss) || 1) * GLIDE_STEER_SIGN;
+    msg = (corrDir > 0 ? 'BANK RIGHT' : 'BANK LEFT') + '  ·  ' + (miss > 0 ? 'SHORT ' + fmt(amiss) : 'LONG ' + fmt(amiss));
+    sub = 'swing the ● onto the ○ line';
+  }
+  hudText(msg, bsx, ay - px(20), 10.5, col, 'center');
+  hudText(sub, bsx, ay - px(9), 8.5, onTrack ? '#8fbf9f' : 'rgba(180,196,210,0.85)', 'center');
+  ctx.restore(); glidePrevShown = true;
 }
 // Forward-integrate the booster (engine-first, NO burn) to estimate seconds until heatFrac hits 1.0
 // (burn-through). Returns Infinity if it never does (already safe / slow enough). Cheap: coarse dt.
@@ -7052,7 +7310,7 @@ function drawGlideConventionBadge() {
   if (mode !== 'ocean' && mode !== 'tower') return;
   const into = GLIDE_STEER_SIGN > 0;
   const line1 = into ? 'GLIDE STEER: LEAN INTO TURN' : 'GLIDE STEER: LEAN AWAY';
-  const line2 = into ? 'bank RIGHT → curve RIGHT   (B to flip)' : 'bank LEFT → curve RIGHT   (B to flip)';
+  const line2 = into ? 'bank RIGHT → curve RIGHT   (B to flip)' : 'bank RIGHT → curve LEFT   (B to flip)';
   const col = into ? '#7cc4ff' : '#e8b93c';
   const cx = W / 2, y = px(30);
   const w = px(300), h = px(34);
@@ -7219,36 +7477,15 @@ function drawModeThumb(m, x, y, w, h, locked) {
   }
 }
 
-// Realism-tier picker: a centered 3-segment toggle. Active tier highlighted; the not-yet-tuned
-// tiers (moderate/fullsim) show a small "β" so the player knows they're work-in-progress.
-function drawTierToggle(cx, cy) {
-  const segW = px(112), segH = px(26), gap = px(4);
-  const totalW = segW * 3 + gap * 2, x0 = cx - totalW / 2;
-  hudText('REALISM', cx, cy - px(11), 8, 'rgba(255,255,255,0.55)', 'center');
-  for (let i = 0; i < 3; i++) {
-    const key = TIER_ORDER[i], tp = TIER[key];
-    const x = x0 + i * (segW + gap), active = key === tier;
-    ctx.fillStyle = active ? 'rgba(30,79,214,0.85)' : 'rgba(20,28,42,0.8)';
-    ctx.strokeStyle = active ? '#7ea8ff' : 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = px(active ? 1.4 : 1);
-    ctx.beginPath(); ctx.roundRect(x, cy, segW, segH, px(6)); ctx.fill(); ctx.stroke();
-    const lab = tp.name + (tp.tuned ? '' : ' β');
-    label(lab, x + segW / 2, cy + segH / 2 + px(3.5), 10, active ? '#ffffff' : '#aeb9c6', 'center');
-    hit(x, cy, segW, segH, () => setTier(key));
-  }
-}
-
 function drawMenu() {
   drawScrim();
   const cx = W / 2;
   hudText('BLUE ORIGIN LANDINGS', cx, H * 0.16, 44, '#ffffff', 'center');
   hudText('land the New Glenn 7×2 · fly the heavier 9×4 · set Blue Moon MK1 down on the Moon', cx, H * 0.16 + px(28), 13.5, '#eef4f9', 'center');
 
-  drawTierToggle(cx, H * 0.16 + px(52));
-
   if (challenge) {
     const bnw = Math.min(px(560), W - px(40));
-    drawChallengeBanner(cx - bnw / 2, H * 0.16 + px(80), bnw, px(60));
+    drawChallengeBanner(cx - bnw / 2, H * 0.16 + px(60), bnw, px(60));
   }
 
   const bw = px(172), bh = px(180), gap = px(13), pad = px(7), thumbH = px(86);
@@ -7720,7 +7957,13 @@ function handleKeyPress(k) {
       // A/B the glide bank-steer convention live so the pilot can pick by feel.
       GLIDE_STEER_SIGN = -GLIDE_STEER_SIGN;
       flashFx(GLIDE_STEER_SIGN > 0 ? 'GLIDE: lean INTO the turn (bank right -> curve right)'
-                                   : 'GLIDE: lean AWAY (bank left -> curve right)');
+                                   : 'GLIDE: lean AWAY (bank right -> curve left)');
+    }
+    else if ((k === 'g' || k === 'G') && (mode === 'ocean' || mode === 'tower')) {
+      // Cycle the glide-guidance UI style live so the pilot can pick the one that reads best.
+      glideGuideStyle = (glideGuideStyle + 1) % 3;
+      const names = ['BANK TAPE', 'STEER ARROW', 'SLOPE VECTORS'];
+      flashFx('GLIDE GUIDE: ' + names[glideGuideStyle] + ' (G to cycle)');
     }
     else if ((k === 'a' || k === 'A') && (mode === 'ocean' || mode === 'tower')) {
       // Watch-me autopilot: let the game fly itself so you can watch a full controlled descent.

@@ -80,6 +80,7 @@ window.__H = (function () {
              GLIDE_FLOOR_Y:(typeof GLIDE_FLOOR_Y!=='undefined'?GLIDE_FLOOR_Y:null),
              GLIDE_ENTRY_SPD:(typeof GLIDE_ENTRY_SPD!=='undefined'?GLIDE_ENTRY_SPD:null),
              GLIDE_LEAN:(typeof GLIDE_LEAN!=='undefined'?GLIDE_LEAN:null),
+             GLIDE_STEER_SIGN:(typeof GLIDE_STEER_SIGN!=='undefined'?GLIDE_STEER_SIGN:null),
              deckX: (function(){ try { return deckX(); } catch(e){ return null; } })() };
   }
 
@@ -281,27 +282,43 @@ def test_E_gimbal_torque(h):
 
 
 def test_F_glide_slope(h):
-    """Above-left of deck with down-right velocity: altitude falls, x moves right toward deck; aft stays downrange."""
-    import math
-    # ocean deckX=12000. Start left of it, in the glide band (below GLIDE_TOP_Y, slowed below GLIDE_ENTRY_SPD).
+    """Glide steering — STRAIGHT-LINE (aim-the-slope) model.
+
+    The booster's glide now uses the AIM-THE-GLIDE-SLOPE model: the pilot's BANK
+    commands the descent-line SLOPE directly (a held bank => a straight slanted
+    ground track), rather than the booster auto-leaning to a fixed GLIDE_LEAN with
+    no input. The old auto-lean assertion was retired with that mechanic (the
+    attitude spring is now intentionally weak so pilot bank dominates — see the
+    `EXP_STRAIGHTLINE && inGlide` branch in stepPhysics).
+
+    The physically-meaningful invariant for the new model: opposite banks steer the
+    trajectory to OPPOSITE sides (banking visibly walks the track), and the booster
+    still descends. We verify a LEFT bank and a RIGHT bank drive horizontal velocity
+    to opposite sides of the neutral (no-bank) track, by a meaningful margin, all
+    while descending in the glide band. (Independently confirmed in
+    testing/_verify_straightline_glide.py; folded in here as the standing gate.)
+    """
     c = h.call("__H.setup('ocean')")
-    top = c["GLIDE_TOP_Y"]; floor = c["GLIDE_FLOOR_Y"]; espd = c["GLIDE_ENTRY_SPD"]; deck = c["deckX"]
+    top = c["GLIDE_TOP_Y"]; floor = c["GLIDE_FLOOR_Y"]; deck = c["deckX"]
     y0 = (top + floor) / 2  # mid glide band
     x0 = deck - 6000        # left of deck
-    # slowed below glide-entry speed, descending, moving right
-    st = {"x": x0, "y": y0, "vx": 80, "vy": -80, "ang": 0.0, "angv": 0, "fuel": 40000}
-    r = h.call(f"__H.run('ocean', {json.dumps(st)}, {{thr:0, tq:0, dt:1/120, steps:240}})")  # 2 s
-    s = r["s"]
-    alt_fell = s["y"] < y0
-    moved_right = s["x"] > x0
-    # aft/tail generally downrange+down during glide: with the attitude spring pulling toward +GLIDE_LEAN
-    # (deck is to the right => deckSide +1), ang should trend positive (nose toward +x, tail toward -x/down).
-    # We check the glide spring engaged: ang moved toward +GLIDE_LEAN.
-    ang_moved_toward_lean = s["ang"] > 0.001
-    ok = alt_fell and moved_right and ang_moved_toward_lean
-    return ("F glide-slope", ok, {"x0": x0, "x1": s["x"], "y0": y0, "y1": s["y"], "ang1": s["ang"],
-                                  "alt_fell": alt_fell, "moved_right": moved_right,
-                                  "ang_toward_lean": ang_moved_toward_lean, "GLIDE_LEAN": c["GLIDE_LEAN"]})
+    base = {"x": x0, "y": y0, "vx": 60, "vy": -70, "angv": 0, "fuel": 40000}
+
+    def fly(ang):
+        st = dict(base); st["ang"] = ang
+        r = h.call(f"__H.run('ocean', {json.dumps(st)}, {{thr:0, tq:0, dt:1/120, steps:300}})")  # 2.5 s
+        return r["s"]
+
+    left = fly(-0.5); neutral = fly(0.0); right = fly(+0.5)
+    descended = left["y"] < y0 and right["y"] < y0 and neutral["y"] < y0
+    # opposite banks => vx on opposite sides of the neutral track (banking steers)
+    steer_split = (left["vx"] - neutral["vx"]) * (right["vx"] - neutral["vx"]) < 0
+    magnitude = abs(left["vx"] - right["vx"])
+    strong = magnitude > 5.0
+    ok = descended and steer_split and strong
+    return ("F glide-slope", ok, {"left_vx": round(left["vx"], 2), "neutral_vx": round(neutral["vx"], 2),
+                                  "right_vx": round(right["vx"], 2), "split_mag": round(magnitude, 2),
+                                  "descended": descended, "steer_split": steer_split, "strong": strong})
 
 
 def test_G_hover(h):
