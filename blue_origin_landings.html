@@ -506,15 +506,13 @@ const GLIDE_STEER_K    = 1.55; // crossrange gain in the glide: steering coeffic
                                //   BUMPED 0.90→1.55 (~+49% spread) per playtest "make it more dramatic" — the
                                //   strongest gain that still grows both ways + stays reasonably symmetric
                                //   (0.73); higher K saturates the left bank (flat-plate β past its lift peak).
-// Which way banking steers, A/B-toggleable live with the 'B' key so the pilot can pick by feel:
-//   +1 = "lean the way you want to go" (bank RIGHT => curve RIGHT — real-wing / aircraft / true-aero /
-//        original-baseline convention). -1 = "lean away" (bank LEFT => curve RIGHT — true flat-plate/
-//        wing behavior for a banked lifting surface: banking RIGHT deflects the flight path LEFT).
-// STRATEGY C1: default flipped to -1 so tilt-RIGHT visibly glides LEFT (matches real-wing bank-to-turn-
-// away-from-lean feel the pilot expects). The attitude-spring targetAng and the on-vehicle glide
-// guide's steer-direction mapping below are BOTH re-derived off this same GLIDE_STEER_SIGN so the
-// closed loop (auto-lean -> aero force -> guide instruction) stays self-consistent for either sign.
-let GLIDE_STEER_SIGN = -1;     // default: lean-away (bank RIGHT => curve LEFT)
+// GLIDE STEER CONVENTION — LOCKED to "lean away" everywhere (chosen as the one true convention):
+// banking RIGHT deflects the flight path LEFT (and LEFT => RIGHT) — the true flat-plate / banked-
+// lifting-surface behavior. This was formerly 'B'-key A/B-toggleable against a "lean into the turn"
+// (+1) alternative; that toggle AND the +1 mode were removed so the feel is identical in every mode
+// and every session. It's a const now so nothing can flip it. All downstream physics + the on-vehicle
+// glide guide read this same constant, so the closed loop (aero force -> guide instruction) stays coherent.
+const GLIDE_STEER_SIGN = -1;   // LOCKED: lean-away (bank RIGHT => curve LEFT). No runtime toggle.
 // WATCH-ME AUTOPILOT (built-in demo bot): press 'A' in flight to let the game fly itself so you can
 // watch a full controlled descent (decel burn -> glide steer to the deck -> terminal landing burn).
 // It drives the same `keys` a player uses, and publishes its phase for the AUTOPILOT-FLYING badge.
@@ -5758,13 +5756,13 @@ function runBotDemo() {
     setBank(targetAng);
     keys[' '] = true;
   } else if (inGlide) {
-    // GLIDE — bank toward the deck. Which body lean walks toward the deck depends on the active
-    // convention: with GLIDE_STEER_SIGN=+1 (lean into the turn) lean the nose toward the deck side;
-    // with -1 (lean away) lean the opposite side. So the bot always steers correctly for either mode.
+    // GLIDE — bank toward the deck. Convention is locked to lean-away (GLIDE_STEER_SIGN=-1): to walk
+    // toward the deck side you lean the OPPOSITE side, so the bot banks -deckSide.
     botPhase = 'GLIDE — banking to the deck';
     const deckSide = dx >= 0 ? 1 : -1;
     const leanMag = 0.5;                              // ~29 deg
-    const targetAng = GLIDE_STEER_SIGN > 0 ? (leanMag * deckSide) : (-leanMag * deckSide);
+    // lean-away convention (GLIDE_STEER_SIGN=-1): lean the side OPPOSITE the deck to walk toward it.
+    const targetAng = -leanMag * deckSide;
     setBank(targetAng);
   } else if (b.y > 2000) {
     // TRANSITION — ease back to vertical for the landing burn.
@@ -6050,9 +6048,8 @@ function drawControlsLegend() {
   const rows = [[orbital ? 'burn' : 'throttle', dim, 'SPACE'], ['steer', dim, '← →'], ['pause', dim, 'P']];
   if (mode === 'moon' && !orbital && !b.staged) rows.push(['stage', dim, 'B']);
   if (mode === 'ocean' || mode === 'tower') {
-    // glide steer convention (B flips) + watch-me autopilot (A) — both booster-only
+    // watch-me autopilot (A) — booster-only. (glide convention is locked to lean-away; no 'B' toggle.)
     rows.push([botDemo ? 'autopilot ON' : 'autopilot', botDemo ? '#ff9a7a' : dim, 'A']);
-    rows.push([GLIDE_STEER_SIGN > 0 ? 'glide: into turn' : 'glide: away', GLIDE_STEER_SIGN > 0 ? viewC : amber, 'B']);
   }
   if (mode === 'moon' || mode === 'mars') {
     // MK1/moon both fly the WARP_STEPS ladder (X steps up, Z snaps back to ×1) — see the
@@ -7303,15 +7300,14 @@ function uiButton(x, y, w, h, lab, fn, accent) {
 }
 
 // pause + 2× chips, bottom-left, clear of the BURN button
-// Persistent glide-steer CONVENTION badge (ocean/tower, in flight). The 'B' key flips the convention
-// live; this always-on label means the pilot never loses track of which one is active after toggling.
+// Persistent glide-steer CONVENTION badge (ocean/tower, in flight). Convention is LOCKED to lean-away
+// (no 'B' toggle); this always-on label just reminds the pilot which way banking walks the track.
 function drawGlideConventionBadge() {
   if (scene !== 'flying' && scene !== 'paused') return;
   if (mode !== 'ocean' && mode !== 'tower') return;
-  const into = GLIDE_STEER_SIGN > 0;
-  const line1 = into ? 'GLIDE STEER: LEAN INTO TURN' : 'GLIDE STEER: LEAN AWAY';
-  const line2 = into ? 'bank RIGHT → curve RIGHT   (B to flip)' : 'bank RIGHT → curve LEFT   (B to flip)';
-  const col = into ? '#7cc4ff' : '#e8b93c';
+  const line1 = 'GLIDE STEER: LEAN AWAY';
+  const line2 = 'bank RIGHT → curve LEFT';
+  const col = '#e8b93c';
   const cx = W / 2, y = px(30);
   const w = px(300), h = px(34);
   ctx.save();
@@ -7953,12 +7949,7 @@ function handleKeyPress(k) {
       else if (mode === 'moon' && SHIP_MODE) edlFit = !edlFit;               // EDL: toggle ship-top/pad-bottom fit view
     }
     else if (k === 'r' || k === 'R') newRun(mode);
-    else if ((k === 'b' || k === 'B') && (mode === 'ocean' || mode === 'tower')) {
-      // A/B the glide bank-steer convention live so the pilot can pick by feel.
-      GLIDE_STEER_SIGN = -GLIDE_STEER_SIGN;
-      flashFx(GLIDE_STEER_SIGN > 0 ? 'GLIDE: lean INTO the turn (bank right -> curve right)'
-                                   : 'GLIDE: lean AWAY (bank right -> curve left)');
-    }
+    // (the 'B' glide-convention flip was removed — lean-away is now the single locked convention)
     else if ((k === 'g' || k === 'G') && (mode === 'ocean' || mode === 'tower')) {
       // Cycle the glide-guidance UI style live so the pilot can pick the one that reads best.
       glideGuideStyle = (glideGuideStyle + 1) % 3;
