@@ -3615,6 +3615,16 @@ function drawSky() {
   }
 }
 function lerpColor(a, c, t) { return [a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t, a[2] + (c[2] - a[2]) * t]; }
+// Continuous "quality" ramp: q=1 → green, 0.66 → yellow, 0.33 → orange, 0 → red. Piecewise-lerps
+// across 4 stops so the color shifts SMOOTHLY as a value degrades (used by the reentry director so
+// it eases green→yellow→orange→red the further off-alignment you get, on either side). Returns 'rgb()'.
+function rampColor(q) {
+  q = q < 0 ? 0 : q > 1 ? 1 : q;
+  const stops = [[255, 80, 64], [255, 138, 58], [232, 185, 60], [88, 214, 141]];  // red, orange, yellow, green
+  const x = q * 3, i = Math.min(2, Math.floor(x)), f = x - i;
+  const c = lerpColor(stops[i], stops[i + 1], f);
+  return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')';
+}
 function h01(n) { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); }
 function rgb(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; }
 
@@ -4646,9 +4656,13 @@ function drawReentryGuide() {
   const vlen = px(64);
   const gx = bsx + ndx * vlen, gy2 = bsy + ndy * vlen;
 
-  // color: green when aligned+burning and heat is under control; amber aligned; red = not aligned
+  // color: a CONTINUOUS green→yellow→orange→red ramp on the alignment error |dAng| (symmetric — same
+  // color whether you're off to the left or the right). Perfectly on the director (err 0) = green;
+  // it eases through yellow/orange and hits full red by ~45° off. Once you're aligned AND burning it
+  // pins to full green (the "engines into the wind, decelerating" all-good state).
   const safe = burning && aligned;
-  const col = safe ? '#58d68d' : aligned ? '#e8b93c' : '#ff6a4a';
+  const alignQ = 1 - Math.min(1, Math.abs(dAng) / 0.80);   // 1 at 0° error → 0 at ~46° off, either side
+  const col = safe ? 'rgb(88,214,141)' : rampColor(alignQ);
 
   ctx.save();
   ctx.strokeStyle = col; ctx.lineWidth = px(2); ctx.lineCap = 'round';
