@@ -2329,7 +2329,10 @@ function predictTrajectory() {
     // you'll actually land if you hold this attitude. (tq=0: forecast holds attitude, doesn't steer.)
     stepPhysics(s, 0.3, thr, 0);
     pts.push({ x: s.x, y: s.y });
-    if (s.y <= 0) break;
+    // mars: stop at the real terrain under the predicted x (so the ✕ lands on the hill/pad the arc
+    // actually meets); every other mode stops at the flat y=0 plane.
+    const stopY = (mode === 'mars') ? marsGroundY(s.x) : 0;
+    if (s.y <= stopY) break;
     // Stop at the apex of arrest ONLY in the terminal LANDING regime (low): there, "where would I
     // stop if I hold this burn" is the useful read. During the HIGH decel burn the booster is still
     // climbing (vy>0) right after handoff — truncating there would make the ✕ a stub and hide the
@@ -2734,34 +2737,45 @@ function mk1Crash(kind, reason, vy, vx, angDeg, off) {
 }
 function mk1EvalTouchdown(vDeg, offForm, spec, OK, padHalf) {
   const vy = -b.vy, vx = Math.abs(b.vx);
-  // --- crash gates (missed pad / too hot / too much drift / tipped) ---
-  if (offForm > padHalf) {
-    mk1Crash('miss', 'off pad', vy, vx, vDeg, offForm);
+  // MOONLANDER: which flat pad (if any) is she over? Off any pad ⇒ she hit hills/crater wall ⇒ crash.
+  const pad = marsPadAt(b.x);
+  if (!pad) {
+    // nearest-pad miss distance for the telemetry read-out
+    const np = marsNearestPad(b.x);
+    mk1Crash('miss', 'off pad', vy, vx, vDeg, Math.abs(b.x - np.x) - np.half);
     return;
   }
+  const off = Math.abs(b.x - pad.x);                 // distance from THIS pad's center
+  // precision normalizes to THIS pad's half-width (a bullseye on the narrow ×8 is worth as much
+  // proportionally as on the wide ×2 — the multiplier below rewards the harder pad).
+  const padSpec = Object.assign({}, spec, { padHalf: pad.half });
+  // --- crash gates (too hot / too much drift / tipped) — off-pad already handled above ---
   const hardVy = vy > OK.vy, hardVx = vx > OK.vx, hardAng = vDeg > OK.ang;
   if (hardVy || hardVx || hardAng) {
     const kind = hardVy ? 'hot' : hardVx ? 'drift' : 'tip';
-    mk1Crash(kind, 'gate', vy, vx, vDeg, offForm);
+    mk1Crash(kind, 'gate', vy, vx, vDeg, off);
     return;
   }
-  // --- clean touchdown: freeze the state, then score it ---
-  const touchVy = vy, touchVx = vx, touchX = offForm, touchFuel = b.fuel;
-  b.vx = 0; b.vy = 0; b.y = 0; b.angv = 0;
-  const s = mk1Score(touchX, touchVy, touchVx, vDeg, touchFuel, spec);
+  // --- clean touchdown: freeze the state, then score it (× the pad multiplier) ---
+  const touchVy = vy, touchVx = vx, touchX = off, touchFuel = b.fuel;
+  b.vx = 0; b.vy = 0; b.angv = 0;   // (b.y already snapped to the pad surface by the contact test)
+  const s = mk1Score(touchX, touchVy, touchVx, vDeg, touchFuel, padSpec);
+  const finalScore = Math.round(s.score * pad.mult);
   // stash the rich scorecard data for drawDone's mars block (finish() sets `result`, we annotate it)
   const card = {
     off: touchX, vy: touchVy, vx: touchVx, ang: vDeg, fuel: touchFuel, contactSpd: s.contactSpd,
-    medals: s.medals, grade: s.grade, ring: s.ring, perfect: s.perfect
+    medals: s.medals, grade: s.grade, ring: s.ring, perfect: s.perfect, mult: pad.mult, padHalf: pad.half
   };
   // telemetry lines (real-scale — no display multiplier for mars)
   const lines = [
     'Descent rate    ' + touchVy.toFixed(1) + ' m/s',
     'Drift           ' + touchVx.toFixed(1) + ' m/s',
     'Tilt            ' + vDeg.toFixed(1) + '°',
+    'Pad             ×' + pad.mult + '   (' + Math.round(pad.half * 2) + ' m wide)',
     'Off-center      ' + touchX.toFixed(1) + ' m   (' + s.ring + ')',
     'Fuel remaining  ' + Math.round(touchFuel) + ' kg'
   ];
+  const breakdown = s.breakdown + '  →  ×' + pad.mult + ' pad = ' + finalScore;
   // --- WIN JUICE ---
   playClank();                                    // the landing-leg contact clank
   // a brighter flash + a punchier chime the better the landing; a triumphant double-chime on PERFECT
@@ -2770,8 +2784,8 @@ function mk1EvalTouchdown(vDeg, offForm, spec, OK, padHalf) {
   else { mk1FlashT = 0.4; mk1FlashCol = '160,220,200'; shakeT = Math.max(shakeT, 0.20); playChime(); }
   // one last hard dust kick on contact so the touchdown blooms regolith (A3's mk1Dust system)
   mk1TouchdownDust(b.x);
-  const title = s.perfect ? 'PERFECT TOUCHDOWN' : 'BLUE MOON MK1 IS ON THE MOON';
-  finish(true, title, lines, s.score, s.breakdown);
+  const title = s.perfect ? 'PERFECT TOUCHDOWN — ×' + pad.mult + ' PAD' : 'BLUE MOON MK1 IS DOWN — ×' + pad.mult;
+  finish(true, title, lines, finalScore, breakdown);
   if (result) result.mk1 = card;   // drawDone reads result.mk1 for the medal/grade scorecard
 }
 // A triumphant major-triad arpeggio for a PERFECT touchdown — richer than the standard playChime().
@@ -3284,6 +3298,12 @@ function update(dt) {
         if (!autoView) viewTip = 7;       // one-time nudge: the cinematic AUTO camera is a keypress away
         break;
       }
+    } else if (mode === 'mars') {
+      // MK1 moonlander: contact is against the real lunar TERRAIN under the lander, not a flat
+      // plane. Landing on a flat pad (within tolerances) scores; touching hills/crater walls off a
+      // pad is a crash. evalTouchdown → mk1EvalTouchdown does the pad resolution + scoring.
+      const gY = marsGroundY(b.x);
+      if (b.y <= gY) { b.y = gY; evalTouchdown(); return; }
     } else {
       if (b.y <= 0) { evalTouchdown(); return; }
     }
@@ -4320,7 +4340,12 @@ function drawTrajectory() {
   let good = false;
   if (mode === 'ocean') good = Math.abs(last.x - dcx) < DECK_HALF;
   else if (mode === 'tower') good = Math.abs(last.x - dcx) < DECK_HALF_94;
-  else good = Math.abs(last.x - dcx) < 30;   // mars (MK1) + moon (MK2) lunar pad (deckX()=0)
+  else if (mode === 'mars') {
+    // MK1 moonlander: the ✕ is green only when the predicted impact lands ON a flat pad (the arc
+    // will meet the real terrain there). Off any pad → white (she'd hit hills/crater wall = crash).
+    const pad = marsPadAt(last.x);
+    good = !!pad && Math.abs(last.x - pad.x) <= pad.half;
+  } else good = Math.abs(last.x - dcx) < 30;   // moon (MK2) lunar pad (deckX()=0)
   ctx.setLineDash([6 * devicePixelRatio, 7 * devicePixelRatio]);
   // dark casing first, bright line on top — readable over the pale sky
   for (const pass of [0, 1]) {
@@ -4335,9 +4360,12 @@ function drawTrajectory() {
   ctx.setLineDash([]);
   // impact marker — when the ✕ runs off the side of the frame (right after
   // separation it sits far down-range), park a mini-✕ at the edge with how
-  // many m/km out of frame it is, so the boostback drag has a target to chase
-  if (last.y <= 1) {
-    const mx = w2sX(last.x), my = w2sY(curveOff(last.x)), r = 7 * devicePixelRatio;
+  // many m/km out of frame it is, so the boostback drag has a target to chase.
+  // mars: the arc terminates at the terrain height (marsGroundY), not the flat y=0 line — so gate
+  // + anchor the ✕ to the surface it actually meets.
+  const impactGroundWY = (mode === 'mars') ? marsGroundY(last.x) : 0;
+  if (last.y <= impactGroundWY + 1) {
+    const mx = w2sX(last.x), my = w2sY(impactGroundWY + curveOff(last.x)), r = 7 * devicePixelRatio;
     if (mx >= -r && mx <= W + r) {
       for (const pass of [0, 1]) {
         ctx.strokeStyle = pass === 0 ? 'rgba(8,14,22,0.6)' : good ? '#58d68d' : '#e74c3c';
