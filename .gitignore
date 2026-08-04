@@ -1,6 +1,8 @@
 # scratch + temp working files
 tmp/
 *.tmp
+# nested scratch working dir (incident backups, tmp probes, frame dumps) — never published
+/local/
 # reference images (keep the repo public-data-clean; the traced vector data is embedded in the game)
 *.png
 *.jpg

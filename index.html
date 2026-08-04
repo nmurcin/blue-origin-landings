@@ -2160,20 +2160,11 @@ function stepPhysics(s, dt, thr, tq) {
       // it. No target-toward-deck spring here (the flight-path controller above owns where she goes).
       const dA = shortestAngleDifference(0, s.ang);           // gently toward upright (neutral slope)
       aacc += (GLIDE_TRIM_K * 0.45) * dA * atmoT;             // weak centering — pilot bank dominates
-    } else if (inGlide) {
-      // Target body attitude: GLIDE_LEAN rad from vertical. Which SIDE to lean toward depends on
-      // GLIDE_STEER_SIGN (STRATEGY C1: re-derived off the same sign the crossrange-lift block uses,
-      // so the closed loop stays coherent): GLIDE_STEER_SIGN=+1 ("lean into the turn") leans the nose
-      // TOWARD the deck side (that lean's CL then throws lift toward the deck). GLIDE_STEER_SIGN=-1
-      // ("lean away", our new default) leans the nose AWAY from the deck side — because with the sign
-      // flipped, THAT lean is the one whose CL throws lift toward the deck. Either way the auto-lean
-      // trim always converges the glide toward Jacklyn.
-      const deckSide = (deckX() >= s.x) ? 1 : -1;
-      const targetAng = GLIDE_LEAN * deckSide * GLIDE_STEER_SIGN;
-      const dA = shortestAngleDifference(targetAng, s.ang);   // shortest-arc error (no ±π-seam jump)
-      aacc += GLIDE_TRIM_K * dA * atmoT;               // attitude spring (rate damping handled above)
     } else {
       // vertical weathercock (unchanged from the amazing build): trim the body toward flow-alignment.
+      // (The old auto-lean glide-trim branch that lived here was removed — it was unreachable once
+      // EXP_STRAIGHTLINE became the permanent glide model, so the straight-line controller above
+      // now owns all in-glide attitude. See the crossrange-lift block for the GLIDE_STEER_SIGN law.)
       aacc -= 1.2e-5 * r * spd * vno * atmoT * (s.vy < 0 ? 1 : 0.4);
     }
   }
