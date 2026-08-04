@@ -64,3 +64,13 @@ gcp-*.json
 aws-credentials*
 *.token
 token.txt
+
+# ============================================================================
+# Experimental / candidate builds — scratch working copies that are NOT the
+# published game. Kept local only: they may lag the public build and can carry
+# working notes/comments that haven't been through the confidentiality pass.
+# Only the shipped files (index.html, blue_origin_landings.html, the _A/_B/_C
+# variants, _variant_launcher.html) are meant to be public.
+# ============================================================================
+exp_*.html
+testing/cand_*.html
