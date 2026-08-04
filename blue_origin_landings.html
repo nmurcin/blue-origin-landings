@@ -513,11 +513,6 @@ const GLIDE_STEER_K    = 1.55; // crossrange gain in the glide: steering coeffic
 // and every session. It's a const now so nothing can flip it. All downstream physics + the on-vehicle
 // glide guide read this same constant, so the closed loop (aero force -> guide instruction) stays coherent.
 const GLIDE_STEER_SIGN = -1;   // LOCKED: lean-away (bank RIGHT => curve LEFT). No runtime toggle.
-// WATCH-ME AUTOPILOT (built-in demo bot): press 'A' in flight to let the game fly itself so you can
-// watch a full controlled descent (decel burn -> glide steer to the deck -> terminal landing burn).
-// It drives the same `keys` a player uses, and publishes its phase for the AUTOPILOT-FLYING badge.
-let botDemo = false;
-let botPhase = '';
 // Orbital (vacuum) RCS — a MOMENTUM model like the launch phase: input is angular
 // acceleration, the resulting spin PERSISTS, and a light bleed (no air up here, so
 // this is reaction-wheel trim) lets a runaway rate be nulled in a few seconds.
@@ -3075,7 +3070,6 @@ function update(dt) {
   updateShip(dt);
   updateDiscard(dt);
   if (scene !== 'flying') { updateParticles(dt); return; }   // (no chopstick-close animation — NG lands on the deck)
-  if (botDemo) runBotDemo();   // watch-me autopilot: sets `keys` before the input read below
 
   // AROUND THE MOON — out in space we run the orbital integrator, not the
   // flat-world descent physics.
@@ -5745,52 +5739,6 @@ function capsuleBar(x, y, w, h, frac, c0, c1, lab, labW, labColor) {
 }
 
 // the one-line coach: what to do right now, phrased for the input device
-// WATCH-ME AUTOPILOT — flies the full NG booster descent so the pilot can watch. Drives the same
-// `keys` map a human uses (so it exercises the identical code path), and flies to the deck under
-// WHATEVER GLIDE_STEER_SIGN is active (it reads the sign to pick which way to bank toward the deck),
-// so it's also a live demonstration that the current convention actually carries the booster home.
-// Sets botPhase for the AUTOPILOT-FLYING badge. Ocean/tower only; hands off if it's not a booster run.
-function runBotDemo() {
-  if (mode !== 'ocean' && mode !== 'tower') { botDemo = false; return; }
-  delete keys['ArrowLeft']; delete keys['ArrowRight']; delete keys[' '];
-  if (!b || b.opening) { botPhase = 'OPENING (mated ascent)'; return; }
-  const spd = Math.hypot(b.vx, b.vy);
-  const dx = deckX() - b.x;                          // + => deck is to the RIGHT
-  const desc = b.vy < 0;
-  const inGlide = desc && b.y < GLIDE_TOP_Y && b.y > GLIDE_FLOOR_Y && spd < GLIDE_ENTRY_SPD;
-  const setBank = (target) => {
-    // proportional attitude command toward a target body angle via the tq keys
-    let e = target - b.ang; while (e > Math.PI) e -= 2 * Math.PI; while (e < -Math.PI) e += 2 * Math.PI;
-    if (e > 0.02) keys['ArrowRight'] = true; else if (e < -0.02) keys['ArrowLeft'] = true;
-  };
-  if (b.y > ENTRY_Y - 500 && spd > 250) {
-    // DECEL BURN — point engine-first (nose opposite velocity) and hold the burn to bleed entry speed.
-    botPhase = 'DECEL BURN (retrograde)';
-    const targetAng = Math.atan2(-b.vx / (spd || 1), -b.vy / (spd || 1));
-    setBank(targetAng);
-    keys[' '] = true;
-  } else if (inGlide) {
-    // GLIDE — bank toward the deck. Convention is locked to lean-away (GLIDE_STEER_SIGN=-1): to walk
-    // toward the deck side you lean the OPPOSITE side, so the bot banks -deckSide.
-    botPhase = 'GLIDE — banking to the deck';
-    const deckSide = dx >= 0 ? 1 : -1;
-    const leanMag = 0.5;                              // ~29 deg
-    // lean-away convention (GLIDE_STEER_SIGN=-1): lean the side OPPOSITE the deck to walk toward it.
-    const targetAng = -leanMag * deckSide;
-    setBank(targetAng);
-  } else if (b.y > 2000) {
-    // TRANSITION — ease back to vertical for the landing burn.
-    botPhase = 'STRAIGHTEN UP';
-    setBank(0);
-  } else {
-    // TERMINAL — stand upright and suicide-burn off the honest STOP marker.
-    botPhase = 'LANDING BURN';
-    setBank(0);
-    const stop = predictBurnStop();
-    if (b.thr > 0.1 || (stop && stop.y < 200) || b.vy < -55) keys[' '] = true;
-  }
-}
-
 function flightHint() {
   let hint = '', warn = false;
   // STACKED OPENING sequence prompts (NG booster modes): FIRING → MECO → SEP → GS2 ignition.
@@ -5799,10 +5747,6 @@ function flightHint() {
     else if (!b.openSep) hint = 'MECO — main engines cut off · stage separation next';
     else hint = 'SEPARATION — GS2 igniting to orbit · you have control in a moment';
     return { hint, warn };
-  }
-  if (b.openT !== undefined && b.openT < OPEN_CTRL + 2.5 && (mode === 'ocean' || mode === 'tower')) {
-    // brief "YOU HAVE CONTROL" beat right after the handoff
-    return { hint: 'YOU HAVE CONTROL — align retrograde and stand by for the DECEL BURN', warn: false };
   }
   if (mode === 'moon' && !inOrbitalPhase()) {
     const BK = MOBILE ? 'BURN' : 'SPACE / ↑';
@@ -6061,10 +6005,6 @@ function drawControlsLegend() {
   // [status text, status colour, key]
   const rows = [[orbital ? 'burn' : 'throttle', dim, 'SPACE'], ['steer', dim, '← →'], ['pause', dim, 'P']];
   if (mode === 'moon' && !orbital && !b.staged) rows.push(['stage', dim, 'B']);
-  if (mode === 'ocean' || mode === 'tower') {
-    // watch-me autopilot (A) — booster-only. (glide convention is locked to lean-away; no 'B' toggle.)
-    rows.push([botDemo ? 'autopilot ON' : 'autopilot', botDemo ? '#ff9a7a' : dim, 'A']);
-  }
   if (mode === 'moon' || mode === 'mars') {
     // MK1/moon both fly the WARP_STEPS ladder (X steps up, Z snaps back to ×1) — see the
     // physics loop and mobile warpStep. The legend must match or the HUD lies about the controls.
@@ -7335,25 +7275,6 @@ function drawGlideConventionBadge() {
   ctx.restore();
 }
 
-// "AUTOPILOT FLYING" banner shown while the built-in demo bot (or an external watch-me driver) is
-// steering, so it's unmistakable that you're watching a bot fly rather than dead controls. The bot
-// publishes its phase into window.__watchBotPhase; toggle the built-in demo with the 'A' key.
-function drawBotStatusBadge() {
-  if (scene !== 'flying') return;
-  if (!(typeof botDemo !== 'undefined' && botDemo) && !(typeof window.__watchBot !== 'undefined' && window.__watchBot)) return;
-  const phase = (typeof window.__watchBotPhase === 'string' && window.__watchBotPhase) ? window.__watchBotPhase : (typeof botPhase === 'string' ? botPhase : 'FLYING');
-  const cx = W / 2, y = px(74);
-  const blink = Math.floor(performance.now() / 500) % 2 === 0;
-  ctx.save();
-  const w = px(260), h = px(30);
-  ctx.fillStyle = 'rgba(20,8,8,0.6)';
-  ctx.beginPath(); ctx.roundRect(cx - w / 2, y - px(4), w, h, px(6)); ctx.fill();
-  ctx.strokeStyle = blink ? '#ff6b4a' : 'rgba(255,107,74,0.4)'; ctx.lineWidth = px(1.4);
-  ctx.beginPath(); ctx.roundRect(cx - w / 2, y - px(4), w, h, px(6)); ctx.stroke();
-  hudText('▶ AUTOPILOT FLYING  ·  ' + phase, cx, y + px(13), 10.5, '#ff9a7a', 'center');
-  ctx.restore();
-}
-
 function drawFlightChips() {
   if (!(MOBILE || NARROW)) return;
   if (scene !== 'flying' && scene !== 'paused') return;
@@ -7970,12 +7891,6 @@ function handleKeyPress(k) {
       const names = ['BANK TAPE', 'STEER ARROW', 'SLOPE VECTORS'];
       flashFx('GLIDE GUIDE: ' + names[glideGuideStyle] + ' (G to cycle)');
     }
-    else if ((k === 'a' || k === 'A') && (mode === 'ocean' || mode === 'tower')) {
-      // Watch-me autopilot: let the game fly itself so you can watch a full controlled descent.
-      botDemo = !botDemo;
-      if (!botDemo) { delete keys['ArrowLeft']; delete keys['ArrowRight']; delete keys[' ']; }
-      flashFx(botDemo ? 'AUTOPILOT ON — watch it fly (A to take over)' : 'AUTOPILOT OFF — you have control');
-    }
     else if (k === 'm' || k === 'M') { scene = 'menu'; silenceFlightAudio(); }
   } else if (scene === 'paused') {
     if (k === 'p' || k === 'P') scene = 'flying';
@@ -8082,7 +7997,6 @@ function frame(now) {
   }
   drawMK1Flash();   // MK1 touchdown/crash screen-flash — over the scene, under the HUD/done overlays (no-op unless mars + active)
   drawGlideConventionBadge();   // persistent label of the current glide bank-steer convention (ocean/tower flight)
-  drawBotStatusBadge();         // "AUTOPILOT FLYING" banner + the bot's live phase, when the watch-me bot is driving
   if (scene !== 'board') drawHUD();
   if (scene === 'menu') { if (NARROW) drawMenuNarrow(); else drawMenu(); }
   if (scene === 'board') { if (NARROW) drawBoardNarrow(); else drawBoard(); }
