@@ -1897,25 +1897,20 @@ function newRun(m) {
     return;
   }
   if (m === 'mars') {
-    // BLUE MOON MK1 — Apollo-style powered descent from low lunar orbit. The landing site (a south-
-    // pole crater floor with water ice) is FAR to the LEFT at x=0. The lander spawns ~16 km to the
-    // RIGHT, flying LEFTWARD toward it. The player flies the four-phase Apollo profile:
-    //   1. BRAKING — pitch the engine retrograde (down-right) and burn to bleed the ~215 m/s of
-    //      horizontal velocity while holding altitude (net brake accel ~3.5 m/s² at full throttle).
-    //   2. COAST — cut the engine and fall the long arc under 1/6 g (warp it forward).
-    //   3. PITCH-OVER — stand the lander vertical as the pad comes up.
-    //   4. HOVERSLAM — a timed terminal burn into the crater floor. Idle throttle CANNOT hover, so
-    //      the arrest is a real commit: fire too early and you waste fuel hovering, too late and you
-    //      arrive hot. The HUD distance tape + predicted-stop marker guide the window.
-    // Spawn retuned from the old (15 km / 340 m/s / 55°) so the brake burn is a ~60 s workout rather
-    // than a ~90 s marathon: a bit closer, a bit slower, less initial tilt. ~60-90 s of live flying
-    // at 1× with warp available for the coast. (Public-data-derived geometry; game-tuned.)
+    // BLUE MOON MK1 — CLASSIC MOONLANDER. You open HOVERING above a rolling lunar surface with
+    // several flat landing pads spread across the field (each a score multiplier: wide ×2 → narrow
+    // ×8). A gentle lateral drift and a slow 1/6-g fall; use the BE-7 to null the drift, pick a pad,
+    // and set her down soft + upright ON the pad — touch the hills or crater walls off a pad and
+    // she's scrap. Whole field is in frame from the start, so it's a fly-across-and-choose game, not
+    // a long cross-range approach. ~30-40 s of live flying; warp available but rarely needed.
+    // (Public-data-derived vehicle figures; playfield geometry is game-tuned — see marsGroundY/marsPads.)
+    const sx0 = 1750 + Math.random() * 200;                 // start just RIGHT of the ×8 pad, over the field
     b = {
-      x: 16000 + Math.random() * 1000,          // ~16 km to the RIGHT of the landing site
-      y: 6000 + Math.random() * 400,            // ~6 km altitude (PDI-scale)
-      vx: -(210 + Math.random() * 20),          // LEFTWARD toward the pad — a ~215 m/s brake workout
-      vy: -14 - Math.random() * 4,              // slight descent rate (builds under 1/6 g)
-      ang: 48 * Math.PI / 180,                  // tilted ~48° from vertical (engine partly retrograde = to the RIGHT)
+      x: sx0,
+      y: marsGroundY(sx0) + 1350 + Math.random() * 150,     // ~1.35 km ABOVE the local surface (field in view)
+      vx: -(34 + Math.random() * 14),                       // gentle LEFTWARD drift across the pads to null
+      vy: -5 - Math.random() * 3,                           // slow descent (builds under 1/6 g)
+      ang: 0,                                               // upright — moonlander opens level, no tilt
       angv: 0,
       fuel: FUEL0, damage: 0, thr: 0, fin: 0, heatFrac: 0,
       prevPinY: 1e9, missT: 0, missReason: '', t: 0
@@ -3459,42 +3454,39 @@ function moonCamTarget() {
 //     so the surface + A3's regolith dust-kick + the target beacon are all visible for the touchdown.
 // The pad (A3's target beacon) is world x=0; the surface is y=0. Camera only reads state + returns a
 // target {x,y,s}; it never draws. AC-null / headless safe (no audio touched here).
-const MK1_PAD_X = 0;                 // landing site / beacon world x (== deckX() for mars)
+const MK1_PAD_X = 0;                 // (legacy) old single-beacon world x; the field is now multi-pad
+// Extent of the pad field (world x), for the "whole field in frame at spawn" camera.
+const MARS_FIELD_L = Math.min.apply(null, marsPads.map(p => p.x - p.half)) - 220;
+const MARS_FIELD_R = Math.max.apply(null, marsPads.map(p => p.x + p.half)) + 220;
+const MARS_FIELD_W = MARS_FIELD_R - MARS_FIELD_L;
+const MARS_FIELD_C = (MARS_FIELD_L + MARS_FIELD_R) / 2;
 function marsCamTarget() {
-  const alt = Math.max(0, b.y);
-  const dxPad = b.x - MK1_PAD_X;     // how far RIGHT of the pad she still is (spawn ~+16 km)
-  // --- ZOOM: vertical world-span the frame should cover, by altitude. Bounded both ways so the
-  // lander is never a speck (high) nor over-zoomed at the deck (low). Broadcast telephoto feel.
-  //   high (~6 km): span ~4.2 km  -> lander readable, arc + pad direction visible
-  //   terminal (<300 m): span ~ 2.2*alt + 260 m -> tight, lander ~upper third, surface below in view
-  const wideSpan = Math.min(4600, alt * 0.72 + 260);   // brake/coast envelope
-  const tightSpan = alt * 2.2 + 260;                   // terminal hoverslam envelope (headroom below)
-  // blend from wide->tight as she drops through the last ~1.8 km (the pitch-over + hoverslam window)
-  const tf = Math.min(1, Math.max(0, (1800 - alt) / 1800));
+  const gUnder = marsGroundY(b.x);                     // terrain surface directly under the lander
+  const clr = Math.max(0, b.y - gUnder);               // clearance above that surface (m)
+  // --- ZOOM: wide enough to show the WHOLE pad field at spawn (moonlander "survey the field"),
+  // tightening to a follow shot as she drops onto her chosen pad. Blend on clearance over ~1.4 km.
+  const aspect = W / (H || 1);
+  const wideSpan  = (MARS_FIELD_W / aspect) * 1.08;    // vertical span that fits the field horizontally
+  const tightSpan = clr * 2.2 + 300;                   // terminal: lander upper-third, surface below
+  const tf = Math.min(1, Math.max(0, (1400 - clr) / 1400));
   const span = wideSpan * (1 - tf) + tightSpan * tf;
   const s = H / Math.max(220, span);
-  // --- HORIZONTAL: lead toward the pad. High up we sit mostly on the lander but bias toward the pad
-  // so its direction is on-screen; as she nears the surface we slide the center toward the pad so the
-  // lander AND the beacon at x=0 both sit in frame for the precision touchdown read. Also add a small
-  // velocity lead so a fast cross-range approach isn't chasing the lander off the edge.
+  // --- HORIZONTAL: at spawn center on the FIELD (all pads visible); as she commits to a pad, slide
+  // the center onto the lander so the touchdown reads tight. Clamp so she never leaves the frame.
   const halfW = (W / s) / 2;
-  const padBias = 0.16 + 0.62 * tf;                    // 16% toward pad high -> up to 78% low
-  let tx = b.x - dxPad * padBias;
-  const velLead = Math.max(-halfW * 0.30, Math.min(halfW * 0.30, b.vx * 1.6));
-  tx += velLead;
-  // Never let the lander leave the frame: clamp the center so the ship stays inside 80% of the half-width.
-  const maxOff = halfW * 0.80;
+  let tx = MARS_FIELD_C * (1 - tf) + b.x * tf;
+  const velLead = Math.max(-halfW * 0.28, Math.min(halfW * 0.28, b.vx * 1.6));
+  tx += velLead * tf;                                  // only lead once we're following (not at spawn)
+  const maxOff = halfW * 0.82;
   if (b.x - tx > maxOff) tx = b.x - maxOff;
   else if (tx - b.x > maxOff) tx = b.x + maxOff;
-  // --- VERTICAL: frame the lander in the UPPER portion so the surface + dust-kick show below her.
-  // High up, keep her a bit above center (the approach arc reads above). As she nears the surface,
-  // the camera center is CAPPED near the ground (y=0 at ~90% down the frame) so the lunar surface,
-  // A3's target beacon, and the regolith dust-kick fill the lower frame — a broadcast "coming in to
-  // land" shot with the lander riding the upper-middle. The lander stays visible because at low alt
-  // it's above the capped center; the horizontal clamp above keeps it inside the sides.
-  const airTy = alt + span * (0.20 + 0.14 * tf);       // "in the air" framing: ship above center
-  const groundTy = span * 0.40;                        // "at the deck" framing: y=0 sits ~90% down the frame
-  const ty = airTy * (1 - tf) + groundTy * tf;         // blend toward the ground-anchored frame as she lands
+  // --- VERTICAL: place the LANDER a fixed fraction down the frame (eases from high at spawn — so the
+  // whole field + surface sit below her — to mid-frame at the deck for the touchdown read). Derived
+  // so both the lander and the terrain under her are always on-screen. Anchored to the local terrain
+  // height (gUnder), not world-0, so a pad in a dip stays framed. cam.y = landerY - (0.5 - fLander)*span
+  // makes w2sY(landerY) land at fLander of the frame height.
+  const fLander = 0.20 * (1 - tf) + 0.55 * tf;                 // 20% down at spawn → 55% down at touchdown
+  const ty = (gUnder + clr) - (0.5 - fLander) * span;
   return { x: tx, y: ty, s };
 }
 function snapGroundCam() {
@@ -4225,12 +4217,17 @@ function drawGround() {
     drawTower();
     ctx.restore();
   }
-  // soft shadow under the booster as she gets close to the surface
-  if (b && b.y < 170 && scene !== 'menu') {
-    const sh = 1 - b.y / 170;
+  // soft shadow under the booster as she gets close to the surface. Measure closeness by CLEARANCE
+  // above the surface under her (terrain height for mars, flat 0 elsewhere) — mars pads sit at
+  // nonzero world-Y, so a raw b.y test would go negative over a sunken pad and drive the ellipse
+  // radius negative (an IndexSizeError). clamp01 on `sh` keeps the radius strictly positive.
+  const shGroundWY = (mode === 'mars') ? marsGroundY(b ? b.x : 0) : 0;
+  const shClr = b ? (b.y - shGroundWY) : 1e9;
+  if (b && shClr < 170 && scene !== 'menu') {
+    const sh = clamp01(1 - shClr / 170);
     ctx.fillStyle = 'rgba(8,12,16,' + (0.30 * sh).toFixed(2) + ')';
     ctx.beginPath();
-    ctx.ellipse(w2sX(b.x), w2sY(curveOff(b.x)) + Math.max(1, 0.5 * cam.s),
+    ctx.ellipse(w2sX(b.x), w2sY(shGroundWY + curveOff(b.x)) + Math.max(1, 0.5 * cam.s),
                 (BW * 0.9 + 9 * (1 - sh)) * cam.s, Math.max(2, 1.1 * cam.s), 0, 0, Math.PI * 2);
     ctx.fill();
   }
