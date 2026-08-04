@@ -10,6 +10,8 @@ nothing regressed. Ordered fast->slow so a cheap failure aborts early.
   5. physics_probes.py     — P1-P7 targeted probes (frame-rate, predictor, NaN smoke)
   6. runtime_error_scan.py — full ascent+descent+touchdown for ocean/tower/mars: 0 errors/NaN/ctx-leak
   7. ui_screen_scan.py     — menu/board/done(win,crash,splash,mars)/paused screens clean
+  8. mars_land_probe.py    — every MK1 moonlander pad (x2/x3/x5/x8) lands soft + scores its ×N multiplier
+                             (the low-altitude touchdown path the autopilot scan doesn't reach)
 
 Run: py testing/green_gate.py            (exit 0 iff all pass)
      py testing/green_gate.py --fast     (skip the two slow Chrome scans 6+7)
@@ -31,6 +33,7 @@ STEPS = [
     ("physics-probes",  ["testing/physics_probes.py", "gate"], "always"),  # writes json; inspected below
     ("runtime-scan",    ["testing/runtime_error_scan.py", "all"], "exit", True),
     ("ui-scan",         ["testing/ui_screen_scan.py"],        "exit", True),
+    ("mars-landable",   ["testing/mars_land_probe.py"],       "exit", True),   # every MK1 pad lands + scores ×N
 ]
 
 

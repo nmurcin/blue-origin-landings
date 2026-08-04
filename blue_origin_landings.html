@@ -3507,10 +3507,11 @@ function updateCam(dt) {
     // scale the follow by the effective warp — smooth at ×1, snap-follow under warp so she never lags
     // out of frame. Terminal descent is always ×1 (warp gate drops it), so the landing is buttery.
     const camWarp = Math.max(1, (warpIdx > 0 && WARP_STEPS[warpIdx]) || 1);
-    const k = Math.min(1, dt * camWarp * 2.6);
+    const k = Math.max(0, Math.min(1, dt * camWarp * 2.6));   // k in [0,1] — never extrapolate past target
     cam.x += (t.x - cam.x) * k;
     cam.y += (t.y - cam.y) * k;
     cam.s += (t.s - cam.s) * k;
+    if (!(cam.s > 0)) cam.s = t.s;                            // scale must stay positive (guards NaN/negative draw radii)
     // A4's landing juice (crash/touchdown) drives shakeT; honor it here so the hoverslam can rattle.
     if (shakeT > 0) {
       shakeT -= dt;
@@ -5946,29 +5947,31 @@ function flightHint() {
     // Blue Moon MK1 lunar descent — A1's 4-phase feel: BRAKE (retrograde, kill the ~215 m/s approach)
     // -> COAST (engine off, save gas, drift toward x=0) -> PITCH-OVER (stand vertical, near the pad)
     // -> HOVERSLAM (firewall late off the honest STOP marker). Coaching keyed off honest real numbers:
-    // horizontal drift b.vx (approach speed), descent rate -b.vy vs the safe corridor, downrange to pad.
+    // MOONLANDER: pick one of the pads, kill your drift over it, then ride the safe-descent corridor
+    // down for a soft, upright touchdown. All reads are CLEARANCE above the terrain under the lander.
     const OK = MK1_OK;
-    const hSpd = Math.abs(b.vx), vDesc = -b.vy, downrange = Math.abs(b.x);
-    const safeVy = mk1SafeVy(b.y);          // max arrestable descent rate at this altitude
+    const hSpd = Math.abs(b.vx), vDesc = -b.vy;
+    const clr = Math.max(0, b.y - marsGroundY(b.x));
+    const safeVy = mk1SafeVy(clr);          // max arrestable descent rate at this clearance
+    const tp = marsNearestPad(b.x);
+    const dxPad = Math.abs(b.x - tp.x);
+    const overPad = dxPad <= tp.half;
     const stop = predictBurnStop();
-    if (hSpd > 40) {
-      // PHASE 1 — RETRO BRAKE: still carrying the cross-range approach speed. Point engine into velocity.
-      hint = 'RETRO BRAKE — kill your ' + hSpd.toFixed(0) + ' m/s cross-speed: engine into velocity (' + STEER_K + '), hold ' + BURN_K;
-      warn = b.y < 2500 && hSpd > 90;       // low + still fast = you left the brake too late
-    } else if (b.y > 900 && vDesc < safeVy) {
-      // PHASE 2 — COAST: cross-speed dead, plenty of altitude, descending safely. Engine off, save fuel.
-      hint = downrange > 400
-        ? 'COAST — nudge toward the ▲ landing site (' + STEER_K + '), let 1/6-g pull you down · save fuel'
-        : 'COAST — over the pad; ease down, engine off, watch your DESCENT corridor';
-    } else if (b.y > 250) {
-      // PHASE 3 — PITCH-OVER: stand her vertical and set up the terminal burn; warn if hot for the corridor.
+    if (hSpd > 25) {
+      // still sliding across the field — kill the lateral drift by leaning + burning
+      hint = 'KILL YOUR DRIFT — ' + hSpd.toFixed(0) + ' m/s sideways: lean (' + STEER_K + ') + hold ' + BURN_K + ' to null it';
+      warn = clr < 250 && hSpd > 40;        // low + still sliding = you'll overshoot the pad
+    } else if (!overPad && clr > 200) {
+      // lined up-ish, plenty of height — slide over your chosen ×N pad and ease down
+      hint = 'PICK A PAD — slide over the ×' + tp.mult + ' pad (' + STEER_K + '), stay upright, let 1/6-g ease you down';
+    } else if (clr > 120) {
       if (vDesc > safeVy) { hint = '⚠ TOO FAST — arrest the descent (' + BURN_K + '), you\'re past the safe corridor'; warn = true; }
-      else hint = 'PITCH VERTICAL — tilt < ' + OK.ang + '°, line up the pad, finger on ' + BURN_K + ' for the slam';
+      else hint = 'LINE UP THE ×' + tp.mult + ' PAD — tilt < ' + OK.ang + '°, drift < ' + OK.vx + ' m/s, ease down';
     } else {
-      // PHASE 4 — HOVERSLAM: commit off the honest STOP marker; then ride her down inside the gate.
-      if (b.thr < MK1_IGNITE_EPS && stop && stop.y <= 5) { hint = '⚠ BURN NOW — hold ' + BURN_K + ' (BE-7 lights to 25%)'; warn = true; }
-      else if (b.thr > MK1_IGNITE_EPS) hint = 'SET HER DOWN — under ' + OK.vy + ' m/s, drift < ' + OK.vx + ', tilt < ' + OK.ang + '°';
-      else { hint = 'HOVERSLAM — burn LATE off the STOP marker; too early and you run the tank dry'; warn = vDesc > safeVy; }
+      // terminal — set her down inside the gate on the pad
+      if (!overPad) { hint = '⚠ OFF THE PAD — slide onto the ×' + tp.mult + ' pad (' + STEER_K + ') before you touch down'; warn = true; }
+      else if (vDesc > safeVy) { hint = '⚠ BURN — ' + BURN_K + ', you\'re coming in too hot for the pad'; warn = true; }
+      else hint = 'SET HER DOWN — under ' + OK.vy + ' m/s, drift < ' + OK.vx + ', tilt < ' + OK.ang + '° · ×' + tp.mult + ' pad';
     }
     return { hint, warn };
   }
@@ -8073,7 +8076,10 @@ function drawChaseScene() {
 // ---------- Main loop ----------
 let lastT = performance.now();
 function frame(now) {
-  let dt = Math.min(0.05, (now - lastT) / 1000);
+  // clamp dt to [0, 0.05]: cap big stalls (tab-switch) AND never let a non-monotonic timestamp make
+  // dt negative (a negative frame delta would run physics/camera backwards — e.g. flip cam.s negative,
+  // which then drives negative draw radii). max(0,...) guarantees forward-only time.
+  let dt = Math.max(0, Math.min(0.05, (now - lastT) / 1000));
   lastT = now;
   hitZones = [];        // tap targets re-register as the UI draws
   syncMobileUI();
