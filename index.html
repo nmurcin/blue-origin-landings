@@ -3697,15 +3697,71 @@ function rgb(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 
 
 // Curved planet surface path (open: along the horizon only)
 function surfacePath(close) {
-  const SEG = 26;
+  // mars follows the real lunar heightfield (marsGroundY) at fine resolution so hills + crater
+  // bowls + flat pads read crisply; every other mode keeps the flat/curved horizon (26 segs).
+  const marsT = (mode === 'mars');
+  const SEG = marsT ? 160 : 26;
   ctx.beginPath();
   for (let i = 0; i <= SEG; i++) {
     const sx = W * i / SEG;
     const wx = cam.x + (sx - W / 2) / cam.s;
-    const sy = w2sY(curveOff(wx));
+    const groundWY = marsT ? marsGroundY(wx) : 0;
+    const sy = w2sY(groundWY + curveOff(wx));
     i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
   }
   if (close) { ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); }
+}
+
+// ---- MK1 landing pads (mars only): flat lit decks on the terrain, each with a ×N multiplier ----
+// Called from drawGround's mars branch (inside its save/restore). groundSY(wx) = screen Y of the
+// terrain surface; pm(v) = the branch's world→px sizer. Smaller pad = higher multiplier, color-coded
+// (green → cyan → amber → hot the harder it is). The pad decks are already FLAT in marsGroundY, so
+// the regolith fill renders them level; here we add the lit deck plate, apron glow, beacon pulse,
+// ×N label, and a few water-ice glints. Every ctx.save has a matching restore.
+const MARS_PAD_COL = { 2: '120,230,170', 3: '120,220,210', 5: '150,205,255', 8: '255,190,120' };
+function drawMarsPads(groundSY, pm) {
+  const beat = 0.6 + 0.4 * Math.sin((b ? b.t : 0) * 3.2);   // slow shared pulse
+  for (const pad of marsPads) {
+    const cx = w2sX(pad.x);
+    const half = pad.half * cam.s;                          // pad half-width in px
+    if (cx + half < -20 || cx - half > W + 20) continue;    // fully off-screen → skip
+    const yTop = groundSY(pad.x);
+    if (yTop < -40 || yTop > H + 40) continue;
+    const col = MARS_PAD_COL[pad.mult] || '150,205,255';
+    ctx.save();
+    // faint lit apron blooming up out of the dark surface so the pad reads from a distance
+    const apronR = Math.max(half * 1.25, pm(20));
+    const apron = ctx.createRadialGradient(cx, yTop, pm(1), cx, yTop, apronR);
+    apron.addColorStop(0, 'rgba(' + col + ',' + (0.20 + 0.12 * beat).toFixed(2) + ')');
+    apron.addColorStop(1, 'rgba(' + col + ',0)');
+    ctx.fillStyle = apron;
+    ctx.fillRect(cx - apronR, yTop - apronR, apronR * 2, apronR * 1.2);
+    // the flat deck plate: a bright bar across the pad span, with end ticks (the landing surface)
+    ctx.strokeStyle = 'rgba(' + col + ',' + (0.65 + 0.3 * beat).toFixed(2) + ')';
+    ctx.lineWidth = Math.max(2 * devicePixelRatio, 0.6 * cam.s);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - half, yTop);
+    ctx.lineTo(cx + half, yTop);
+    ctx.stroke();
+    // corner uprights (little landing-pad legs marking the usable edges)
+    const up = pm(5);
+    ctx.beginPath();
+    ctx.moveTo(cx - half, yTop); ctx.lineTo(cx - half, yTop - up);
+    ctx.moveTo(cx + half, yTop); ctx.lineTo(cx + half, yTop - up);
+    ctx.stroke();
+    // ×N multiplier label, centered above the deck, color-coded by difficulty
+    label('×' + pad.mult, cx, yTop - pm(9) - up, 12, 'rgba(' + col + ',0.95)', 'center');
+    // a couple of water-ice glints on the deck (the reason we land here)
+    ctx.fillStyle = 'rgba(205,232,255,0.55)';
+    for (const fx of [-0.45, 0.1, 0.55]) {
+      const gx = cx + fx * half;
+      if (Math.abs(gx - cx) < half) {
+        ctx.beginPath(); ctx.ellipse(gx, yTop + pm(1.4), pm(3), pm(1), 0, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
 }
 
 // scattered cloud deck at 2-6 km: soft feathered puffs and wispy sheets,
@@ -4028,60 +4084,23 @@ function drawGround() {
     surfacePath(false);
     ctx.stroke();
     ctx.save();
-    ctx.translate(0, -curveOff(0) * cam.s);
     const pm = (v) => Math.max(v * cam.s, v * 0.5 * devicePixelRatio);
+    // screen Y of the terrain surface at a given world x (the single source of truth). Every
+    // decoration below sits ON this profile so hills/craters/rocks never float off the silhouette.
+    const groundSY = (wx) => w2sY(marsGroundY(wx) + curveOff(wx));
     const viewW = W / (cam.s || 1), leftC = Math.floor((cam.x - viewW / 2) / 80) * 80;
-    // MANY craters (procedural, world-anchored). LOW sun ⇒ bright LEFT rim, dark floor, LONG shadow RIGHT.
-    for (let wx = leftC; wx < cam.x + viewW / 2 + 80; wx += 80) {
-      const cr = 12 + h01(wx * 0.37) * 40;   // crater radius 12-52 m
-      const cd = 2 + h01(wx * 0.81) * 5;     // crater depth (visual)
-      if (h01(wx * 0.53) < 0.35) continue;   // skip ~35% of slots for variety
-      const scx = w2sX(wx + h01(wx * 1.2) * 40 - 20), scr = pm(cr);
-      if (scx < -scr * 2.4 || scx > W + scr * 2.4) continue;
-      const cy = gy + pm(cd * 0.3);
-      // long raking shadow cast to the RIGHT of the rim
-      ctx.fillStyle = 'rgba(6,8,11,0.55)';
-      ctx.beginPath(); ctx.ellipse(scx + scr * 0.55, cy, scr * 1.5, pm(cd * 0.6), 0, Math.PI * 0.05, Math.PI * 0.95); ctx.fill();
-      // dark crater bowl
-      ctx.fillStyle = 'rgba(16,18,22,0.5)';
-      ctx.beginPath(); ctx.ellipse(scx, cy, scr * 0.85, pm(cd * 0.45), 0, 0, Math.PI); ctx.fill();
-      // sunlit LEFT rim highlight
-      ctx.strokeStyle = 'rgba(198,204,212,0.5)'; ctx.lineWidth = Math.max(1, pm(cd * 0.22));
-      ctx.beginPath(); ctx.ellipse(scx, cy, scr, pm(cd * 0.7), 0, Math.PI * 0.55, Math.PI * 1.05); ctx.stroke();
-    }
-    // ---- the TARGET landing site at x=0: illuminated crater floor + beacon ring ----
-    const lsx = w2sX(0), lsr = pm(45);
-    // gentle bowl depression
-    ctx.fillStyle = 'rgba(12,15,19,0.45)';
-    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI); ctx.fill();
-    // a faint lit apron so the aim point glows out of the dark surface
-    const apron = ctx.createRadialGradient(lsx, gy + pm(1), pm(2), lsx, gy + pm(1), lsr * 1.15);
-    apron.addColorStop(0, 'rgba(150,205,255,0.22)');
-    apron.addColorStop(1, 'rgba(150,205,255,0)');
-    ctx.fillStyle = apron; ctx.fillRect(lsx - lsr * 1.2, gy - lsr * 0.7, lsr * 2.4, lsr * 1.4);
-    // bright bullseye ring on the rim (the unmistakable aim point — cyan-white beacon)
-    const beat = 0.6 + 0.4 * Math.sin((b ? b.t : 0) * 3.2);   // slow pulse
-    ctx.strokeStyle = 'rgba(120,230,190,' + (0.5 + 0.4 * beat).toFixed(2) + ')';
-    ctx.lineWidth = Math.max(1.6 * devicePixelRatio, 0.5 * cam.s);
-    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(2), lsr, pm(4), 0, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.ellipse(lsx, gy + pm(1.6), lsr * 0.5, pm(2), 0, 0, Math.PI * 2); ctx.stroke();
-    // center beacon tick
-    ctx.strokeStyle = 'rgba(150,240,200,' + (0.6 + 0.4 * beat).toFixed(2) + ')';
-    ctx.beginPath(); ctx.moveTo(lsx, gy - pm(3)); ctx.lineTo(lsx, gy + pm(3)); ctx.stroke();
-    // water ice patches (pale blue-white spots in the crater floor — the reason we're landing here)
-    ctx.fillStyle = 'rgba(205,232,255,0.6)';
-    for (const [ox, ow] of [[-18,8],[-5,12],[10,6],[22,9],[-30,5]]) {
-      ctx.beginPath(); ctx.ellipse(w2sX(ox), gy + pm(2.5), pm(ow), pm(1.2), 0, 0, Math.PI * 2); ctx.fill();
-    }
-    // small rocks + boulders (scattered) with short raking shadows to the right
-    if (cam.s > 0.35) {
+    // Surface-relief rock/boulder scatter riding the real profile. LOW sun ⇒ sunlit stone + raking
+    // shadow to the RIGHT. (The big crater BOWLS are now part of marsGroundY's silhouette itself,
+    // so here we only add small surface debris for texture — no more painted-on bowl ellipses that
+    // would double-dip a profile that already dips.)
+    if (cam.s > 0.28) {
       const left = Math.floor((cam.x - viewW / 2) / 14) * 14;
       for (let wx = left; wx < cam.x + viewW / 2 + 14; wx += 14) {
         const rh = h01(wx * 0.617);
         if (rh < 0.5) continue;
-        const depth = 1.5 + h01(wx) * 18;
-        const sy2 = gy + depth * cam.s;
-        if (sy2 > H) continue;
+        if (marsPadAt(wx)) continue;                       // keep pads clean of debris
+        const sy2 = groundSY(wx);
+        if (sy2 > H || sy2 < -20) continue;
         const rw = Math.max(2, (0.7 + h01(wx * 1.7) * 2) * cam.s), rhpx = Math.max(1.5, (0.4 + h01(wx * 2.3)) * cam.s);
         ctx.fillStyle = 'rgba(6,8,11,0.4)';   // shadow
         ctx.fillRect(w2sX(wx) + rw, sy2, rw * 1.6, rhpx * 0.6);
@@ -4089,6 +4108,8 @@ function drawGround() {
         ctx.fillRect(w2sX(wx), sy2, rw, rhpx);
       }
     }
+    // ---- the LANDING PADS (flat lit decks with ×N multipliers) sitting on the terrain ----
+    drawMarsPads(groundSY, pm);
     ctx.restore();
   } else {
     // launch site: sandy scrubland with a concrete catch pad
@@ -5713,8 +5734,12 @@ function drawMK1Dust() {
   if (mk1Dust === undefined) mk1Dust = [];
   // SPAWN: only while the plume is lit AND the ground is close under it (terminal descent).
   // The plume impingement point is just below the lander base (b.x, ~0 altitude at touchdown).
-  if (b && scene === 'flying' && b.thr > 0.15 && b.fuel > 0 && b.y < MK1_DUST_ALT && b.y > -2) {
-    const prox = 1 - Math.max(0, b.y) / MK1_DUST_ALT;    // 0 far, 1 at the deck — denser as she nears
+  // Clearance is measured above the TERRAIN under the lander (marsGroundY), not world-0, so the
+  // dust kicks whenever she's low over whatever pad/hill she's descending onto.
+  const gUnder = b ? marsGroundY(b.x) : 0;               // world-Y of the surface under the lander
+  const clr = b ? (b.y - gUnder) : 1e9;                  // clearance above that surface (m)
+  if (b && scene === 'flying' && b.thr > 0.15 && b.fuel > 0 && clr < MK1_DUST_ALT && clr > -2) {
+    const prox = 1 - Math.max(0, clr) / MK1_DUST_ALT;    // 0 far, 1 at the deck — denser as she nears
     const n = Math.min(6, Math.floor(1 + prox * prox * 6 * b.thr));
     const gx = b.x + Math.sin(b.ang) * 1.0;              // impingement roughly under the nozzle
     for (let i = 0; i < n && mk1Dust.length < 260; i++) {
@@ -5729,7 +5754,9 @@ function drawMK1Dust() {
     }
   }
   // UPDATE + RENDER (ballistic: straight arcs under lunar gravity, no drag → no clouds)
-  const gyBase = w2sY(0);
+  // p.y is ground-RELATIVE (0 = the local surface under the lander); anchor render to the terrain
+  // height there (gUnder) so grains ride the real pad/hill, not a flat world-0 line.
+  const gyBase = w2sY(gUnder + (b ? curveOff(b.x) : 0));
   const out = [];
   for (const p of mk1Dust) {
     p.age += dt;
@@ -5738,7 +5765,7 @@ function drawMK1Dust() {
     if (p.y <= 0 && p.vy < 0) { p.y = 0; p.vy *= -0.18; p.vx *= 0.6; }   // low bounce, quickly settles
     if (p.age < p.life && Math.abs(p.x - (b ? b.x : 0)) < 400) out.push(p);
     const t = p.age / p.life;
-    const sx = w2sX(p.x), sy = w2sY(p.y);
+    const sx = w2sX(p.x), sy = w2sY(p.y + gUnder + (b ? curveOff(b.x) : 0));
     if (sx < -20 || sx > W + 20 || sy > gyBase + 40) continue;
     const r = Math.max(1 * devicePixelRatio, p.r * cam.s);
     // pale sunlit regolith grain, fading as it settles
