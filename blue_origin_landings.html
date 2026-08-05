@@ -2349,8 +2349,11 @@ function predictTrajectory() {
 // plus `clr` = clearance above the terrain/deck there, and `arrested` (false = can't stop before the
 // integration floor = you're coming in too hot). NOT tied to the current-throttle dashed line — when
 // the engine is off that line is ballistic and never arrests; this always finds the true arrest height.
-function predictBurnStop() {
-  if (Math.abs(b.ang) > 0.6 || b.vy > -5) return null;
+function predictBurnStop(force) {
+  // `force` (used by the latched STOP marker) skips the descending+upright self-gate so the marker can
+  // keep tracking the arrest point continuously once it's armed; unforced callers (the burn-now cues)
+  // still only get a value when actually descending (vy < -5) & roughly upright (|ang| < 0.6 rad).
+  if (!force && (Math.abs(b.ang) > 0.6 || b.vy > -5)) return null;
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: 0, fuel: b.fuel };
   // model the real engine spool-up (same constant as update()) and integrate fine — assuming instant
   // full thrust read the stop ~300 m too high at landing-burn speeds. MK1 (mars) spools at the slower
@@ -4464,13 +4467,20 @@ function drawEntryGate(pts) {
 // silently parking at the wrong position.
 function drawBurnStop() {
   burnStopInfo = null;
-  if (b.y > (T().entryY > 8500 ? T().entryY * 0.6 : 4500) || b.vy > -5 || Math.abs(b.ang) > 0.6) return;
+  // LATCH: once you first enter the landing regime (low enough + descending + roughly upright) the STOP
+  // marker ARMS and then stays on for the rest of the run. Previously this same 3-part test ran EVERY
+  // frame, so the marker blinked out whenever you tilted past ~34° to kill drift or a burn briefly
+  // pushed vy above -5 — exactly the flicker the pilot hit. Now it's an arm-once trigger, not a
+  // per-frame visibility gate; after arming we force predictBurnStop so it keeps tracking continuously.
+  const armAlt = (T().entryY > 8500 ? T().entryY * 0.6 : 4500);
+  if (!b.stopArmed && b.y <= armAlt && b.vy < -5 && Math.abs(b.ang) < 0.6) b.stopArmed = true;
+  if (!b.stopArmed) return;
   // The STOP marker is the vy=0 arrest ALTITUDE of a committed burn from now (predictBurnStop) — the
   // suicide-burn height. It is placed at that WORLD position (not clamped to the ground / end of the
   // dashed line): if the burn arrests in the air the marker floats there; if she's too hot to stop
   // before the surface, predictBurnStop reports the (below-surface) vy=0 point and it reads red/off the
   // bottom, honestly telling you "you can't stop in time." margin = clearance above the surface there.
-  const stop = predictBurnStop();
+  const stop = predictBurnStop(true);   // forced: armed marker tracks continuously (no per-frame self-gate)
   if (!stop) return;
   const stopX = stop.x, stopWY = stop.y;
   const margin = stop.clr;

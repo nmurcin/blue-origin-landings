@@ -11,6 +11,7 @@ nothing regressed. Ordered fast->slow so a cheap failure aborts early.
   6. runtime_error_scan.py — full ascent+descent+touchdown for ocean/tower/mars: 0 errors/NaN/ctx-leak
   7. ui_screen_scan.py     — menu/board/done(win,crash,splash,mars)/paused screens clean
   8. mars_land_probe.py    — every MK1 moonlander pad (x2/x3/x5/x8) lands soft + scores its ×N multiplier
+  9. _stop_latch.py        — STOP marker arms once then stays on through hard tilt / vy overshoot (no flicker)
                              (the low-altitude touchdown path the autopilot scan doesn't reach)
 
 Run: py testing/green_gate.py            (exit 0 iff all pass)
@@ -34,6 +35,7 @@ STEPS = [
     ("runtime-scan",    ["testing/runtime_error_scan.py", "all"], "exit", True),
     ("ui-scan",         ["testing/ui_screen_scan.py"],        "exit", True),
     ("mars-landable",   ["testing/mars_land_probe.py"],       "exit", True),   # every MK1 pad lands + scores ×N
+    ("stop-latch",      ["testing/_stop_latch.py"],           "exit", True),   # STOP marker arms once then stays on (no flicker on tilt/overshoot)
 ]
 
 
