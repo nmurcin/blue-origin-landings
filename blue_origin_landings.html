@@ -2323,11 +2323,16 @@ function predictTrajectory() {
     // the predicted path uses the SAME physics as the real vehicle, so the ✕ is accurate: where
     // you'll actually land if you hold this attitude. (tq=0: forecast holds attitude, doesn't steer.)
     stepPhysics(s, 0.3, thr, 0);
-    pts.push({ x: s.x, y: s.y });
+    pts.push({ x: s.x, y: s.y, vy: s.vy });   // vy carried so consumers can find the arrest (vy=0) point
     // mars: stop at the real terrain under the predicted x (so the ✕ lands on the hill/pad the arc
     // actually meets); every other mode stops at the flat y=0 plane.
     const stopY = (mode === 'mars') ? marsGroundY(s.x) : 0;
     if (s.y <= stopY) break;
+    // mars: if the CURRENT burn arrests the descent, END the line at that apex — that IS the "stop"
+    // point (vy reaches 0), so the dashed path terminates exactly where vertical motion stops instead
+    // of curving back up into the sky. Only when she's actually descending now (a hover/climb projects
+    // normally). drawBurnStop reads this same crossing so its ⊣⊢ marker sits on the line, at the height.
+    if (mode === 'mars' && b.vy < 0 && s.vy >= 0) break;
     // Stop at the apex of arrest ONLY in the terminal LANDING regime (low): there, "where would I
     // stop if I hold this burn" is the useful read. During the HIGH decel burn the booster is still
     // climbing (vy>0) right after handoff — truncating there would make the ✕ a stub and hide the
@@ -3270,7 +3275,7 @@ function update(dt) {
     }
     b.heatFrac = Math.min(1.5, lastHeat.q3 / lastHeat.tol);
 
-    if (b.damage >= 100) { crash(b.x, b.y, 'Burned up on reentry — keep the belly to the wind'); return; }
+    if (b.damage >= 100) { crash(b.x, b.y, 'Burned up on reentry — point the engines into the wind and burn to bleed speed'); return; }
 
     if (mode === 'tower') {
       // NEW GLENN 9×4 lands on Jacklyn just like the 7×2 — no chopstick catch. Touchdown is
@@ -4450,13 +4455,30 @@ function drawEntryGate(pts) {
 function drawBurnStop() {
   burnStopInfo = null;
   if (b.y > (T().entryY > 8500 ? T().entryY * 0.6 : 4500) || b.vy > -5 || Math.abs(b.ang) > 0.6) return;
-  const stop = predictBurnStop();
-  if (!stop) return;
-  const floor = 0;
-  const margin = stop.y - floor;
+  // stopWY/stopX = where vertical velocity reaches zero (the arrest apex) in WORLD coords; marginClr =
+  // clearance above the terrain/deck at that point. NG uses the "firewall-now" predictBurnStop model.
+  // MARS derives the stop from the SAME dashed predicted-path (predictTrajectory, at CURRENT throttle):
+  // the point where vy crosses 0 — so the ⊣⊢ marker sits ON the dashed line, at the true arrest height.
+  let stopWY, stopX, marginClr;
+  if (mode === 'mars') {
+    const pts = predictTrajectory();
+    // find the first point where the descent arrests (vy goes from <0 to >=0) — the terminal point of
+    // the (now-truncated) mars line. Fall back to the last point if it never arrests (would hit ground).
+    let apex = null;
+    for (const p of pts) { if (p.vy >= 0) { apex = p; break; } }
+    if (!apex) apex = pts.length ? pts[pts.length - 1] : null;
+    if (!apex) return;
+    stopX = apex.x; stopWY = apex.y;
+    marginClr = apex.y - marsGroundY(apex.x);        // clearance above the surface at the arrest point
+  } else {
+    const stop = predictBurnStop();
+    if (!stop) return;
+    stopX = stop.x; stopWY = stop.y; marginClr = stop.y;   // NG: predictBurnStop.y is already height-above-deck
+  }
+  const margin = marginClr;
   const color = margin > 250 ? '#58d68d' : margin > 80 ? '#ffb14a' : '#ff5040';
   const r = 16 * devicePixelRatio;
-  const rawSx = w2sX(stop.x), rawSy = w2sY(stop.y + curveOff(stop.x));
+  const rawSx = w2sX(stopX), rawSy = w2sY(stopWY + curveOff(stopX));
   const onScreen = rawSx > px(50) && rawSx < W - px(160) && rawSy > px(80) && rawSy < H - px(40);
   let sx, sy;
   if (onScreen) {
