@@ -2323,15 +2323,15 @@ function predictTrajectory() {
     // the predicted path uses the SAME physics as the real vehicle, so the ✕ is accurate: where
     // you'll actually land if you hold this attitude. (tq=0: forecast holds attitude, doesn't steer.)
     stepPhysics(s, 0.3, thr, 0);
-    pts.push({ x: s.x, y: s.y, vy: s.vy });   // vy carried so consumers can find the arrest (vy=0) point
+    pts.push({ x: s.x, y: s.y });
     // mars: stop at the real terrain under the predicted x (so the ✕ lands on the hill/pad the arc
     // actually meets); every other mode stops at the flat y=0 plane.
     const stopY = (mode === 'mars') ? marsGroundY(s.x) : 0;
     if (s.y <= stopY) break;
-    // mars: if the CURRENT burn arrests the descent, END the line at that apex — that IS the "stop"
-    // point (vy reaches 0), so the dashed path terminates exactly where vertical motion stops instead
-    // of curving back up into the sky. Only when she's actually descending now (a hover/climb projects
-    // normally). drawBurnStop reads this same crossing so its ⊣⊢ marker sits on the line, at the height.
+    // mars: if the CURRENT-throttle path arrests the descent (vy crosses 0 while she's burning), END
+    // the dashed line at that apex instead of letting it curve back up into the sky — the visible line
+    // then stops where your current burn would stop you. (The STOP ⊣⊢ marker is computed separately by
+    // predictBurnStop as a full committed-burn arrest, so it's meaningful even when the engine is off.)
     if (mode === 'mars' && b.vy < 0 && s.vy >= 0) break;
     // Stop at the apex of arrest ONLY in the terminal LANDING regime (low): there, "where would I
     // stop if I hold this burn" is the useful read. During the HIGH decel burn the booster is still
@@ -2342,30 +2342,40 @@ function predictTrajectory() {
   }
   return pts;
 }
-// Where would we stop if we lit full throttle right now (held vertical-ish)?
+// Where would your VERTICAL velocity reach zero if you committed a full arresting burn from right now
+// (spool current→full, held roughly vertical)? This is the suicide-burn arrest ALTITUDE — the useful
+// read whether the engine is currently lit (you're holding the burn → it ramps to full) or cold (this
+// is "where you'd stop IF you lit it now and held it"). Returns WORLD position {x, y} of the vy=0 point
+// plus `clr` = clearance above the terrain/deck there, and `arrested` (false = can't stop before the
+// integration floor = you're coming in too hot). NOT tied to the current-throttle dashed line — when
+// the engine is off that line is ballistic and never arrests; this always finds the true arrest height.
 function predictBurnStop() {
   if (Math.abs(b.ang) > 0.6 || b.vy > -5) return null;
   const s = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, ang: b.ang, angv: 0, fuel: b.fuel };
-  // model the real engine spool-up (same constant as update()) and integrate
-  // fine — assuming instant full thrust read the stop ~300 m too high at
-  // landing-burn speeds, promising margin the booster didn't have.
-  // MK1 (mars) spools at the slower MK1_THROTTLE_RATE and is floored at MK1_MIN_THROTTLE once lit,
-  // so the terminal-burn STOP marker A2 draws honestly reflects the BE-7's slower, floored spool
-  // (a full-throttle-instant model read the stop too low for MK1). Other modes: unchanged k=8 spool.
+  // model the real engine spool-up (same constant as update()) and integrate fine — assuming instant
+  // full thrust read the stop ~300 m too high at landing-burn speeds. MK1 (mars) spools at the slower
+  // MK1_THROTTLE_RATE and is floored at MK1_MIN_THROTTLE once lit. Other modes: unchanged k=8 spool.
   const isMK1 = (mode === 'mars');
   const spoolK = isMK1 ? MK1_THROTTLE_RATE : 8;
+  const startGnd = isMK1 ? marsGroundY(b.x) : 0;
   let thr = b.thr;
   for (let i = 0; i < 1500; i++) {
     thr += (1 - thr) * Math.min(1, 0.025 * spoolK);
     const thrEff = isMK1 ? Math.max(thr, MK1_MIN_THROTTLE) : thr;
     stepPhysics(s, 0.025, thrEff, 0);
     s.ang *= 0.994; // assume the pilot steers vertical during the burn
-    // mars: measure the stop against the terrain under the projected x, and report the stop as
-    // CLEARANCE above that surface (so the HUD's "arrest at +N m" / "BURN NOW" reads are honest over
-    // pads that sit at nonzero world-Y). Other modes keep the flat-0 model unchanged.
     const gnd = isMK1 ? marsGroundY(s.x) : 0;
-    if (s.vy >= 0) return { y: s.y - gnd, x: s.x };
-    if (s.y <= gnd) return { y: s.y - gnd, x: s.x };
+    // vy crossed to >= 0 → arrested. Report the WORLD position + clearance above the surface there.
+    if (s.vy >= 0) return { x: s.x, y: s.y, clr: s.y - gnd, arrested: true };
+    // NG (ocean/tower): unchanged — the deck is the floor, stop there (a stop at/below deck = a hot
+    // landing, margin≈0). MARS: DON'T stick at the ground — keep integrating (even a bit below the
+    // surface) so we report the true altitude where vy would reach 0. If she can't arrest within
+    // ~1.5 km below the surface, she's hopelessly hot: report that (arrested:false) rather than lie.
+    if (!isMK1 && s.y <= gnd) return { x: s.x, y: s.y, clr: s.y - gnd, arrested: false };
+    // mars: if the arrest point is already ~200 m below the surface, she's hopelessly hot — report it
+    // (pinned near/just-below the surface, arrested:false) so the marker reads red "can't stop in time"
+    // instead of vanishing. (200 m is well past any recoverable margin at these speeds.)
+    if (isMK1 && s.y < startGnd - 200) return { x: s.x, y: s.y, clr: s.y - gnd, arrested: false };
   }
   return null;
 }
@@ -4455,27 +4465,15 @@ function drawEntryGate(pts) {
 function drawBurnStop() {
   burnStopInfo = null;
   if (b.y > (T().entryY > 8500 ? T().entryY * 0.6 : 4500) || b.vy > -5 || Math.abs(b.ang) > 0.6) return;
-  // stopWY/stopX = where vertical velocity reaches zero (the arrest apex) in WORLD coords; marginClr =
-  // clearance above the terrain/deck at that point. NG uses the "firewall-now" predictBurnStop model.
-  // MARS derives the stop from the SAME dashed predicted-path (predictTrajectory, at CURRENT throttle):
-  // the point where vy crosses 0 — so the ⊣⊢ marker sits ON the dashed line, at the true arrest height.
-  let stopWY, stopX, marginClr;
-  if (mode === 'mars') {
-    const pts = predictTrajectory();
-    // find the first point where the descent arrests (vy goes from <0 to >=0) — the terminal point of
-    // the (now-truncated) mars line. Fall back to the last point if it never arrests (would hit ground).
-    let apex = null;
-    for (const p of pts) { if (p.vy >= 0) { apex = p; break; } }
-    if (!apex) apex = pts.length ? pts[pts.length - 1] : null;
-    if (!apex) return;
-    stopX = apex.x; stopWY = apex.y;
-    marginClr = apex.y - marsGroundY(apex.x);        // clearance above the surface at the arrest point
-  } else {
-    const stop = predictBurnStop();
-    if (!stop) return;
-    stopX = stop.x; stopWY = stop.y; marginClr = stop.y;   // NG: predictBurnStop.y is already height-above-deck
-  }
-  const margin = marginClr;
+  // The STOP marker is the vy=0 arrest ALTITUDE of a committed burn from now (predictBurnStop) — the
+  // suicide-burn height. It is placed at that WORLD position (not clamped to the ground / end of the
+  // dashed line): if the burn arrests in the air the marker floats there; if she's too hot to stop
+  // before the surface, predictBurnStop reports the (below-surface) vy=0 point and it reads red/off the
+  // bottom, honestly telling you "you can't stop in time." margin = clearance above the surface there.
+  const stop = predictBurnStop();
+  if (!stop) return;
+  const stopX = stop.x, stopWY = stop.y;
+  const margin = stop.clr;
   const color = margin > 250 ? '#58d68d' : margin > 80 ? '#ffb14a' : '#ff5040';
   const r = 16 * devicePixelRatio;
   const rawSx = w2sX(stopX), rawSy = w2sY(stopWY + curveOff(stopX));
@@ -4512,7 +4510,7 @@ function drawBurnStop() {
     ctx.moveTo(sx + Math.cos(ang) * px(12), sy + Math.sin(ang) * px(12));
     ctx.lineTo(sx + Math.cos(ang + 0.4) * px(7), sy + Math.sin(ang + 0.4) * px(7));
     ctx.stroke();
-    hudText('STOP +' + Math.round(margin) + ' m', sx + px(14), sy + px(3), 9, color, 'left');
+    hudText('STOP ' + (margin >= 0 ? '+' : '') + Math.round(margin) + ' m', sx + px(14), sy + px(3), 9, color, 'left');
   }
   burnStopInfo = {
     text: 'BURN STOP ' + (margin >= 0 ? '+' : '') + Math.round(margin) + ' m ' +
@@ -4670,18 +4668,18 @@ function drawMK1Guidance() {
   const upC = Math.abs(tiltDeg) <= MK1_OK.ang ? '#7ee0a8' : '#ff6b4a';
   hudText((Math.abs(tiltDeg) <= MK1_OK.ang ? '⇧ UPRIGHT ' : '⚠ TILT ') + Math.abs(tiltDeg).toFixed(0) + '°',
           midX, dY + px(28), 7.5, upC, 'center');
-  // --- BURN-NOW commit cue, off the MK1-honest predictBurnStop ---
+  // --- BURN-NOW commit cue, off the MK1-honest predictBurnStop (.clr = arrest clearance above surface) ---
   const stop = predictBurnStop();
-  const commit = b.thr < MK1_IGNITE_EPS && stop && stop.y <= 5;   // firewall-now would arrest at/under pad
+  const commit = b.thr < MK1_IGNITE_EPS && stop && stop.clr <= 5;   // firewall-now would arrest at/under pad
   const cy = dY + px(46);
   if (commit) {
     const blink = Math.floor(performance.now() / 220) % 2 === 0;
     ctx.fillStyle = blink ? 'rgba(255,107,74,0.9)' : 'rgba(255,107,74,0.45)';
     ctx.beginPath(); ctx.roundRect(midX - px(44), cy - px(11), px(88), px(20), px(5)); ctx.fill();
     hudText('★ BURN NOW ★', midX, cy + px(3.5), 9.5, '#ffffff', 'center');
-  } else if (stop && stop.y > 5 && b.thr < MK1_IGNITE_EPS && vDesc > 2) {
+  } else if (stop && stop.clr > 5 && b.thr < MK1_IGNITE_EPS && vDesc > 2) {
     // honest lead: how far the firewall-now stop point sits ABOVE the pad (you can still coast down)
-    hudText('arrest at +' + Math.round(stop.y) + ' m', midX, cy + px(3), 8, 'rgba(159,216,255,0.9)', 'center');
+    hudText('arrest at +' + Math.round(stop.clr) + ' m', midX, cy + px(3), 8, 'rgba(159,216,255,0.9)', 'center');
   } else if (b.thr > MK1_IGNITE_EPS) {
     hudText('BE-7 LIT ' + Math.round(b.thr * 100) + '%', midX, cy + px(3), 8, '#ffd28c', 'center');
   }
@@ -5959,7 +5957,7 @@ function flightHint() {
     } else {
       const stop = predictBurnStop();
       const OK = landingSpec(mode).ok;
-      if (b.thr < 0.1 && stop && stop.y < 220) { hint = '⚠ LANDING BURN — hold ' + BURN_K + ' NOW (3→1 engines)'; warn = true; }
+      if (b.thr < 0.1 && stop && stop.clr < 220) { hint = '⚠ LANDING BURN — hold ' + BURN_K + ' NOW (3→1 engines)'; warn = true; }
       else if (b.thr > 0.1) hint = 'Set her on Jacklyn — under ' + OK.vy + ' m/s, tilt < ' + OK.ang + '°';
       else hint = 'Line up the deck — lean ' + STEER_K + ', burn late off the STOP marker';
     }
@@ -5978,7 +5976,6 @@ function flightHint() {
     const tp = marsNearestPad(b.x);
     const dxPad = Math.abs(b.x - tp.x);
     const overPad = dxPad <= tp.half;
-    const stop = predictBurnStop();
     if (hSpd > 25) {
       // still sliding across the field — kill the lateral drift by leaning + burning
       hint = 'KILL YOUR DRIFT — ' + hSpd.toFixed(0) + ' m/s sideways: lean (' + STEER_K + ') + hold ' + BURN_K + ' to null it';
@@ -6015,7 +6012,7 @@ function flightHint() {
   else {
     const OK = landingSpec(mode).ok;
     const stop = predictBurnStop();
-    if (b.thr < 0.1 && stop && stop.y < 180) { hint = '⚠ BURN NOW — hold ' + BURN_K; warn = true; }
+    if (b.thr < 0.1 && stop && stop.clr < 180) { hint = '⚠ BURN NOW — hold ' + BURN_K; warn = true; }
     else if (b.y > 2600 || (b.thr < 0.1 && b.y > 1500)) hint = 'FINS & STRAKES — ' + (MOBILE ? STEER_K : 'lean ← →') + ' to glide the ✕ onto the target';
     else if (b.thr < 0.1) hint = 'Hold ' + BURN_K + ' to burn — kill speed before the deck';
     else hint = 'Set her on Jacklyn under ' + OK.vy + ' m/s, tilt < ' + OK.ang + '°';
