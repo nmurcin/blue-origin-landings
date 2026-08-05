@@ -896,7 +896,10 @@ let mk1DustLast = 0;             // performance.now() of the previous dust updat
 // and the camera, so they can never disagree. World Y (not "depth below 0"): ~0 far from features,
 // dips in craters, and FORCED FLAT across every pad. Deterministic: built only from the pure hash
 // h01() + a fixed seed — NEVER Math.random / Date.now (those would desync physics vs. render).
-const MARS_TERRAIN_SEED   = 1337;   // fixed → identical terrain every call, every frame, every run
+// SEED — mutable, but only ever changed ONCE per run by buildMarsField() (via Math.random at run start,
+// NEVER inside marsGroundY). So within a run the height field is a pure function of marsSeed → physics
+// and render can't disagree; across runs, each play gets a fresh randomized surface (moonlander-style).
+let marsSeed = 1337;
 const MARS_HILL_AMP       = 120;    // m, peak rolling-hill amplitude (sum-of-sines envelope)
 const MARS_HILL_L1        = 920;    // m, long rolling wavelength (broad rises + valleys)
 const MARS_HILL_L2        = 350;    // m, medium undulation
@@ -907,21 +910,63 @@ const MARS_CRATER_RADIUS  = 210;    // m, crater gaussian scale (bowl half-width
 const MARS_CRATER_SKIP    = 0.35;   // fraction of crater slots left empty (variety)
 const MARS_FIELD_HALF     = 2100;   // m, half-width of the designed pad field around x=0
 const MARS_PAD_BLEND      = 45;     // m, cosine ramp from rolling terrain onto a flat pad (no cliff)
-// The pads. `half` = HALF-width (m) → also the per-pad landing tolerance (replaces the old fixed
-// padHalf=30). Widest = easiest = ×2; narrowest = hardest = ×8. Spread so the hover-spawn frames all.
-const marsPads = [
+// The pads. `half` = HALF-width (m) → also the per-pad landing tolerance. Widest = easiest = ×2;
+// narrowest = hardest = ×8. RANDOMIZED per run by buildMarsField() (moonlander-style): pad x-positions
+// and widths are re-rolled each play, then the ×N multiplier is assigned BY NARROWNESS RANK — the
+// smallest deck is always the ×8, the widest always the ×2 — so the hardest landing is always the
+// biggest reward, exactly like http://moonlander.seb.ly/. `let` because buildMarsField replaces it.
+// Default (below) is the pre-randomization layout; buildMarsField overwrites it at each run start.
+let marsPads = [
   { x: -1500, half: 140, mult: 2 },   // wide, easy
   { x:  -480, half:  92, mult: 3 },
   { x:   620, half:  56, mult: 5 },
-  { x:  1620, half:  32, mult: 8 }    // narrow, hard (~the old single-pad padHalf)
+  { x:  1620, half:  32, mult: 8 }    // narrow, hard
 ];
+// The score multipliers, widest→narrowest. Assigned by rank so hardest (smallest) pad = highest ×.
+const MARS_PAD_MULTS = [2, 3, 5, 8];
+// Re-roll the lunar surface + pad field for a fresh run. Picks a new terrain seed and lays 4 pads at
+// randomized x + width across the field, then assigns multipliers by narrowness rank. Called ONLY from
+// newRun('mars') — never per-frame — so the terrain stays a pure function of marsSeed during the run.
+// `rnd` defaults to Math.random but is injectable so tests can seed a repeatable field.
+function buildMarsField(rnd) {
+  rnd = rnd || Math.random;
+  marsSeed = 1 + Math.floor(rnd() * 1e6);           // fresh terrain shape this run
+  // 4 pads spread across the field with jittered spacing; each gets a random half-width in-band. Sort
+  // by x so they never overlap on screen; then rank by width to hand out the ×N (narrowest → ×8).
+  const N = 4;
+  const slotW = (2 * MARS_FIELD_HALF) / N;           // even slots across [-HALF, +HALF]
+  // Draw the 4 half-widths from 4 SEPARATED bands so they're always DISTINCT — equal widths would make
+  // the narrowness rank (and thus which pad is the ×8) ambiguous, and two same-size pads with different
+  // ×N reads arbitrary. Bands (narrow→wide): [30,55) [60,85) [90,115) [120,150]. One width per band, so
+  // sorting by width gives a strict, unambiguous ×8→×2 ranking every run.
+  const WIDTH_BANDS = [[30, 55], [60, 85], [90, 115], [120, 150]];
+  const halves = WIDTH_BANDS.map(([lo, hi]) => lo + Math.floor(rnd() * (hi - lo)));
+  // shuffle which band lands in which x-slot so the hardest pad isn't always in the same place (Fisher–
+  // Yates with the injected rnd — keeps the field repeatable under a seeded rnd for tests).
+  for (let i = halves.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = halves[i]; halves[i] = halves[j]; halves[j] = t; }
+  const pads = [];
+  for (let i = 0; i < N; i++) {
+    const slotC = -MARS_FIELD_HALF + slotW * (i + 0.5);
+    const x = slotC + (rnd() - 0.5) * slotW * 0.5;   // jitter within the slot (no crossing into neighbors)
+    pads.push({ x: Math.round(x), half: halves[i] });
+  }
+  pads.sort((a, b) => a.x - b.x);                    // left→right for stable on-screen order
+  // rank by width: widest gets MARS_PAD_MULTS[0] (×2), narrowest gets the last (×8). Widths are distinct
+  // by construction (one per band) so this ranking is strict — no ties, no ambiguity.
+  const byWidth = pads.slice().sort((a, b) => b.half - a.half);
+  byWidth.forEach((p, rank) => { p.mult = MARS_PAD_MULTS[Math.min(rank, MARS_PAD_MULTS.length - 1)]; });
+  for (const p of pads) p._topY = undefined;         // clear the lazy pad-top cache for the new seed
+  marsPads = pads;
+  marsFieldDirty = true;                             // tell the camera-bounds to recompute (see MARS_FIELD_*)
+}
+let marsFieldDirty = false;
 // Raw rolling-hills + gaussian-crater elevation (world Y), BEFORE pad flattening. Pure + finite.
 function marsHillCraterY(wx) {
   // three phase-shifted sines → smooth rolling hills; phases from the seed so it's fixed but not an
   // obvious single sine. Amplitudes 0.6/0.3/0.1 sum to 1 → total envelope = MARS_HILL_AMP.
-  const p1 = h01(MARS_TERRAIN_SEED * 1.3) * 6.283185;
-  const p2 = h01(MARS_TERRAIN_SEED * 2.7) * 6.283185;
-  const p3 = h01(MARS_TERRAIN_SEED * 5.1) * 6.283185;
+  const p1 = h01(marsSeed * 1.3) * 6.283185;
+  const p2 = h01(marsSeed * 2.7) * 6.283185;
+  const p3 = h01(marsSeed * 5.1) * 6.283185;
   let y = MARS_HILL_AMP * (
       0.6 * Math.sin(wx / MARS_HILL_L1 + p1)
     + 0.3 * Math.sin(wx / MARS_HILL_L2 + p2)
@@ -930,10 +975,10 @@ function marsHillCraterY(wx) {
   const i0 = Math.floor((wx - 2 * MARS_CRATER_RADIUS) / MARS_CRATER_SPACING);
   const i1 = Math.ceil ((wx + 2 * MARS_CRATER_RADIUS) / MARS_CRATER_SPACING);
   for (let i = i0; i <= i1; i++) {
-    if (h01(i * 1.7 + MARS_TERRAIN_SEED) < MARS_CRATER_SKIP) continue;   // ~35% of slots empty
-    const cx  = i * MARS_CRATER_SPACING + (h01(i * 2.3 + MARS_TERRAIN_SEED) - 0.5) * MARS_CRATER_SPACING * 0.5;
-    const sig = MARS_CRATER_RADIUS * (0.6 + 0.7 * h01(i * 3.9 + MARS_TERRAIN_SEED));   // varied width (>0)
-    const dep = MARS_CRATER_DEPTH  * (0.5 + 0.5 * h01(i * 4.6 + MARS_TERRAIN_SEED));   // varied depth
+    if (h01(i * 1.7 + marsSeed) < MARS_CRATER_SKIP) continue;   // ~35% of slots empty
+    const cx  = i * MARS_CRATER_SPACING + (h01(i * 2.3 + marsSeed) - 0.5) * MARS_CRATER_SPACING * 0.5;
+    const sig = MARS_CRATER_RADIUS * (0.6 + 0.7 * h01(i * 3.9 + marsSeed));   // varied width (>0)
+    const dep = MARS_CRATER_DEPTH  * (0.5 + 0.5 * h01(i * 4.6 + marsSeed));   // varied depth
     const d   = (wx - cx) / sig;
     y -= dep * Math.exp(-0.5 * d * d);   // gaussian bowl — smooth, finite for all x
   }
@@ -1904,7 +1949,10 @@ function newRun(m) {
     // she's scrap. Whole field is in frame from the start, so it's a fly-across-and-choose game, not
     // a long cross-range approach. ~30-40 s of live flying; warp available but rarely needed.
     // (Public-data-derived vehicle figures; playfield geometry is game-tuned — see marsGroundY/marsPads.)
-    const sx0 = 1750 + Math.random() * 200;                 // start just RIGHT of the ×8 pad, over the field
+    buildMarsField();                                       // RE-ROLL the lunar surface + pad field this run
+    // start just RIGHT of the field so the whole pad spread is in frame and she drifts left across it
+    const fieldR = Math.max.apply(null, marsPads.map(p => p.x));
+    const sx0 = fieldR + 150 + Math.random() * 200;
     b = {
       x: sx0,
       y: marsGroundY(sx0) + 1350 + Math.random() * 150,     // ~1.35 km ABOVE the local surface (field in view)
@@ -3477,12 +3525,19 @@ function moonCamTarget() {
 // The pad (A3's target beacon) is world x=0; the surface is y=0. Camera only reads state + returns a
 // target {x,y,s}; it never draws. AC-null / headless safe (no audio touched here).
 const MK1_PAD_X = 0;                 // (legacy) old single-beacon world x; the field is now multi-pad
-// Extent of the pad field (world x), for the "whole field in frame at spawn" camera.
-const MARS_FIELD_L = Math.min.apply(null, marsPads.map(p => p.x - p.half)) - 220;
-const MARS_FIELD_R = Math.max.apply(null, marsPads.map(p => p.x + p.half)) + 220;
-const MARS_FIELD_W = MARS_FIELD_R - MARS_FIELD_L;
-const MARS_FIELD_C = (MARS_FIELD_L + MARS_FIELD_R) / 2;
+// Extent of the pad field (world x), for the "whole field in frame at spawn" camera. Recomputed from
+// the live marsPads whenever buildMarsField re-rolls them (marsFieldDirty), since pads now move per run.
+let MARS_FIELD_L, MARS_FIELD_R, MARS_FIELD_W, MARS_FIELD_C;
+function marsFieldRecalc() {
+  MARS_FIELD_L = Math.min.apply(null, marsPads.map(p => p.x - p.half)) - 220;
+  MARS_FIELD_R = Math.max.apply(null, marsPads.map(p => p.x + p.half)) + 220;
+  MARS_FIELD_W = MARS_FIELD_R - MARS_FIELD_L;
+  MARS_FIELD_C = (MARS_FIELD_L + MARS_FIELD_R) / 2;
+  marsFieldDirty = false;
+}
+marsFieldRecalc();   // seed from the default pad layout at module load
 function marsCamTarget() {
+  if (marsFieldDirty) marsFieldRecalc();               // pads moved this run → refresh the field extent
   const gUnder = marsGroundY(b.x);                     // terrain surface directly under the lander
   const clr = Math.max(0, b.y - gUnder);               // clearance above that surface (m)
   // --- ZOOM: wide enough to show the WHOLE pad field at spawn (moonlander "survey the field"),
@@ -5305,6 +5360,61 @@ function drawLandingSiteMarker() {
   ctx.restore();
 }
 
+// BE-7 plume ground-deflection (mars only). When the exhaust reaches the regolith, the gas can't go
+// through it — it fans OUT along the surface. We draw that as a bright impingement bloom at the contact
+// point plus two "wings" of deflected gas that follow the local surface tangent and curl slightly up,
+// so the flame reads as splashing off the ground instead of clipping through it. Purely cosmetic; keyed
+// off the same clearance the flame-clip uses. Impingement point = nozzle (b.x,b.y) projected DOWN the
+// body axis to the surface. Surface tangent comes from sampling marsGroundY a few metres either side.
+function drawMK1PlumeSplash() {
+  if (!b || scene !== 'flying' || b.thr <= 0.04 || b.fuel <= 0) return;
+  const clr = b.y - marsGroundY(b.x);                 // nozzle clearance above the surface (m)
+  // full plume length this frame (mirror of the flame calc, sans the random flicker for stability)
+  const plume = b.thr * 30 * 1.15;
+  const axisToGnd = clr / Math.max(0.35, Math.cos(b.ang));   // slant distance to ground along the plume
+  if (axisToGnd > plume || clr < -3) return;          // plume doesn't reach the ground yet → no splash
+  // how forcefully the plume is hitting: 1 when the nozzle is right on the deck, tapering as she lifts.
+  const hit = Math.max(0, Math.min(1, 1 - axisToGnd / plume)) * Math.min(1, b.thr / 0.5);
+  if (hit <= 0.02) return;
+  // impingement WORLD point: down the body axis (tilted by b.ang) from the nozzle to the surface.
+  const ix = b.x + Math.sin(b.ang) * axisToGnd;
+  const igy = marsGroundY(ix);                        // put it ON the terrain under that x
+  // local surface tangent (unit) from a small central difference of the heightfield
+  const e = 6, gL = marsGroundY(ix - e), gR = marsGroundY(ix + e);
+  let tx = 2 * e, ty = gR - gL, tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;   // tangent → +x side
+  const sx = w2sX(ix), sy = w2sY(igy + curveOff(ix));
+  const S = cam.s;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';           // gas glows additively over the dark regolith
+  // 1) impingement bloom — a bright hemispherical flash hugging the ground at the contact point
+  const rB = (5 + 9 * hit) * S;
+  const bloom = ctx.createRadialGradient(sx, sy, 0, sx, sy, rB);
+  bloom.addColorStop(0, 'rgba(236,246,255,' + (0.55 * hit).toFixed(3) + ')');
+  bloom.addColorStop(0.5, 'rgba(150,195,255,' + (0.26 * hit).toFixed(3) + ')');
+  bloom.addColorStop(1, 'rgba(120,170,240,0)');
+  ctx.fillStyle = bloom;
+  ctx.beginPath(); ctx.arc(sx, sy, rB, 0, Math.PI * 2); ctx.fill();
+  // 2) two deflected-gas WINGS fanning out along the surface tangent, curling up away from the ground.
+  //    Each wing is a filled sliver from the contact point, out along ±tangent, lifting by `curl`.
+  const reach = (14 + 30 * hit) * S;                  // how far the gas skates along the surface (px)
+  const curl  = (5 + 12 * hit) * S;                   // how high the far end lifts off the ground (px)
+  for (const dir of [-1, 1]) {
+    const ex = sx + tx * reach * dir, ey = sy + ty * reach * dir - curl;   // wing far end (lifted up)
+    const mx = sx + tx * reach * 0.5 * dir, my = sy + ty * reach * 0.5 * dir - curl * 0.35;   // mid ctrl
+    const wg = ctx.createLinearGradient(sx, sy, ex, ey);
+    wg.addColorStop(0, 'rgba(226,240,255,' + (0.5 * hit).toFixed(3) + ')');
+    wg.addColorStop(0.5, 'rgba(150,195,255,' + (0.22 * hit).toFixed(3) + ')');
+    wg.addColorStop(1, 'rgba(120,170,240,0)');
+    ctx.fillStyle = wg;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(mx, my - 3 * S, ex, ey);                 // upper edge (curls up)
+    ctx.quadraticCurveTo(mx, my + 3 * S, sx + tx * 3 * dir, sy);  // lower edge back along the ground
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawBooster() {
   if (!b) return;
   const sx = w2sX(b.x), sy = w2sY(b.y + curveOff(b.x));
@@ -5346,7 +5456,17 @@ function drawBooster() {
   if (b.thr > 0.04 && b.fuel > 0) {
     // In VACUUM (mars) the BE-7 plume is TIGHT + bright (no air to billow into); NG widens in thin air.
     const expand = mode === 'mars' ? 1.0 : 1 + Math.max(0, 1 - rho(b.y) / 0.5) * 0.7;
-    const fl = b.thr * (26 + Math.random() * 9) * (mode === 'mars' ? 1.15 : 1);
+    let fl = b.thr * (26 + Math.random() * 9) * (mode === 'mars' ? 1.15 : 1);
+    // PLUME–GROUND CLIP (mars): the flame is drawn `fl` world-metres down the body axis from the nozzle
+    // (≈ b.x,b.y). Don't let it punch THROUGH the regolith — clip its length to the along-axis distance
+    // to the surface (vertical clearance / cos(tilt)), stopping a hair (0.5 m) above ground. Above the
+    // surface it's uncapped (full plume). NG modes are untouched (they land on a flat deck at y≈0 and
+    // the clip only ever engages in the last metre). The deflected-gas fan is drawn after restore below.
+    if (mode === 'mars') {
+      const clrNoz = b.y - marsGroundY(b.x);
+      const axisToGnd = (clrNoz - 0.5) / Math.max(0.35, Math.cos(b.ang));   // slant distance along the plume
+      fl = Math.max(0, Math.min(fl, axisToGnd));
+    }
     if (mode === 'mars') {
       // engine glow halo at the nozzle — a soft blue-white bloom (methalox-blue/white BE-7 flame)
       const bloom = ctx.createRadialGradient(0, 0, 0, 0, 0, 8 * VW + 6);
@@ -5484,6 +5604,11 @@ function drawBooster() {
     }
   }
   ctx.restore();
+
+  // PLUME DEFLECTION (mars): when the BE-7 exhaust reaches the regolith, draw the gas fanning OUT along
+  // the surface (radial splash + two curled wings) instead of the flame appearing to spear through the
+  // ground. Drawn in WORLD space (outside the sprite frame) so it hugs the sloped/curved terrain.
+  if (mode === 'mars') drawMK1PlumeSplash();
 
   // reentry plasma — forms at the AFT/engine end (which faces into the airflow tail-first) and
   // streams opposite the velocity. Anchored to the aft in the sprite frame so it stays glued to

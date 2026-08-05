@@ -12,6 +12,8 @@ nothing regressed. Ordered fast->slow so a cheap failure aborts early.
   7. ui_screen_scan.py     — menu/board/done(win,crash,splash,mars)/paused screens clean
   8. mars_land_probe.py    — every MK1 moonlander pad (x2/x3/x5/x8) lands soft + scores its ×N multiplier
   9. _stop_latch.py        — STOP marker arms once then stays on through hard tilt / vy overshoot (no flicker)
+ 10. _mars_random_field.py — lunar terrain + pads randomize per run; ×N assigned by narrowness; physics==render
+ 11. _plume_shot.py        — BE-7 plume deflects off the regolith when low (reaches ground), not when high
                              (the low-altitude touchdown path the autopilot scan doesn't reach)
 
 Run: py testing/green_gate.py            (exit 0 iff all pass)
@@ -36,6 +38,8 @@ STEPS = [
     ("ui-scan",         ["testing/ui_screen_scan.py"],        "exit", True),
     ("mars-landable",   ["testing/mars_land_probe.py"],       "exit", True),   # every MK1 pad lands + scores ×N
     ("stop-latch",      ["testing/_stop_latch.py"],           "exit", True),   # STOP marker arms once then stays on (no flicker on tilt/overshoot)
+    ("mars-random",     ["testing/_mars_random_field.py"],    "exit", True),   # terrain+pads re-roll per run; ×N by narrowness; physics==render
+    ("plume-splash",    ["testing/_plume_shot.py"],           "exit", True),   # BE-7 plume deflects off ground (reaches when low, not when high; no crash)
 ]
 
 
