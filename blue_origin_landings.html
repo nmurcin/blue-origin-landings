@@ -4423,7 +4423,7 @@ function drawTrajectory() {
   }
   ctx.restore();                 // end the belly-first fade-in (entry gate + burn-stop stay full)
   drawEntryGate(pts);
-  drawBurnStop();
+  drawBurnStop(pts);             // pass the SAME forecast the ✕ line uses so STOP rides that line
 }
 
 // Entry gate: where you should cross into the atmosphere, belly-first (Mars only)
@@ -4465,8 +4465,27 @@ function drawEntryGate(pts) {
 // Where you would stop if you went full throttle right now. If the stop point is off-screen,
 // shows an edge-clamped chevron + margin distance (like the impact marker does) instead of
 // silently parking at the wrong position.
-function drawBurnStop() {
+// Find the point ON the forecast path `pts` where clearance-above-terrain first drops to `targetClr`
+// (walking from the vehicle downrange). Linearly interpolates between the two straddling samples so the
+// marker glides smoothly instead of hopping between the coarse 0.3 s prediction steps. Returns the WORLD
+// {x, y} of that on-line point, or null if the whole path stays above targetClr (arrest point is past
+// the end of the drawn line). groundOf(x) = the surface world-Y under x (flat 0 for NG, terrain for mars).
+function pathPointAtClearance(pts, targetClr, groundOf) {
+  let px0 = b.x, py0 = b.y, pc0 = py0 - groundOf(px0);   // start from the vehicle itself
+  for (let i = 0; i < pts.length; i++) {
+    const px1 = pts[i].x, py1 = pts[i].y, pc1 = py1 - groundOf(px1);
+    // clearance crosses targetClr between the previous point and this one → interpolate the crossing
+    if ((pc0 - targetClr) * (pc1 - targetClr) <= 0 && pc0 !== pc1) {
+      const t = (pc0 - targetClr) / (pc0 - pc1);
+      return { x: px0 + (px1 - px0) * t, y: py0 + (py1 - py0) * t };
+    }
+    px0 = px1; py0 = py1; pc0 = pc1;
+  }
+  return null;
+}
+function drawBurnStop(pts) {
   burnStopInfo = null;
+  if (!pts) pts = predictTrajectory();   // defensive: normal caller passes the shared forecast; stand alone if not
   // LATCH: once you first enter the landing regime (low enough + descending + roughly upright) the STOP
   // marker ARMS and then stays on for the rest of the run. Previously this same 3-part test ran EVERY
   // frame, so the marker blinked out whenever you tilted past ~34° to kill drift or a burn briefly
@@ -4475,15 +4494,25 @@ function drawBurnStop() {
   const armAlt = (T().entryY > 8500 ? T().entryY * 0.6 : 4500);
   if (!b.stopArmed && b.y <= armAlt && b.vy < -5 && Math.abs(b.ang) < 0.6) b.stopArmed = true;
   if (!b.stopArmed) return;
-  // The STOP marker is the vy=0 arrest ALTITUDE of a committed burn from now (predictBurnStop) — the
-  // suicide-burn height. It is placed at that WORLD position (not clamped to the ground / end of the
-  // dashed line): if the burn arrests in the air the marker floats there; if she's too hot to stop
-  // before the surface, predictBurnStop reports the (below-surface) vy=0 point and it reads red/off the
-  // bottom, honestly telling you "you can't stop in time." margin = clearance above the surface there.
+  // WHERE to burn = predictBurnStop's firewall-now arrest CLEARANCE above the surface (`clr`). That
+  // number is always available (engine hot or cold), which is why the marker never flickers. WHERE to
+  // DRAW it = the point on the SAME forecast path the ✕ line uses (pts) at that clearance — so the STOP
+  // marker RIDES the trajectory line instead of floating off on its own integration. As you speed up,
+  // clr grows and the marker slides UP the line toward you ("the burn point is rushing up to meet you");
+  // when it reaches the pad it's BURN NOW; a negative clr means you can't arrest above the surface (red).
   const stop = predictBurnStop(true);   // forced: armed marker tracks continuously (no per-frame self-gate)
   if (!stop) return;
-  const stopX = stop.x, stopWY = stop.y;
   const margin = stop.clr;
+  const groundOf = (mode === 'mars') ? marsGroundY : (() => 0);
+  // Place the marker on the line at clearance = clr. If clr < 0 (too hot) there's no such point above
+  // the surface — anchor to where the line meets the ground (the impact ✕) so it reads red AT the crash
+  // point. If the line never reaches clr (arrest is beyond the drawn path), fall back to the raw world
+  // point from predictBurnStop so the marker still shows rather than vanishing.
+  const onLine = margin >= 0 ? pathPointAtClearance(pts, margin, groundOf) : null;
+  let stopX, stopWY;
+  if (onLine) { stopX = onLine.x; stopWY = onLine.y; }
+  else if (margin < 0 && pts.length) { const L = pts[pts.length - 1]; stopX = L.x; stopWY = L.y; }
+  else { stopX = stop.x; stopWY = stop.y; }
   const color = margin > 250 ? '#58d68d' : margin > 80 ? '#ffb14a' : '#ff5040';
   const r = 16 * devicePixelRatio;
   const rawSx = w2sX(stopX), rawSy = w2sY(stopWY + curveOff(stopX));
