@@ -4994,6 +4994,15 @@ const GLIDE_DEADBAND  = 250;    // m: within this, "ON TRACK" — terminal landi
 const GLIDE_MARK_SLEW = 0.22;   // per-frame low-pass toward the bug target (damped, jitter-immune)
 const GLIDE_LOCK_HOLD = 0.6;    // s on-bug before the LOCKED chip latches (debounces a 1-frame blip)
 const GLIDE_BANK_MAX  = GLIDE_STALL_CAP;   // rad: tape half-span (±~55°); ideal lean (~30°) sits ~0.54 out
+// Is the NG booster in its heavy-tilt GLIDE phase right now? Single source of truth so the glide-guide
+// tape AND the "GLIDE STEER: LEAN AWAY" badge appear/hide together — descending, below the glide top,
+// above the re-vertical floor, slowed past the hot decel, engine mostly off. During the DECEL BURN
+// (fast + high + engine lit) this is false, so the badge clears the top for the urgent decel hint.
+function ngInGlide() {
+  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return false;
+  const spd = Math.hypot(b.vx, b.vy);
+  return b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
+}
 // Dispatcher: route to the active glide-guidance STYLE (cycle live with 'G'). Each renderer is
 // self-contained (they recompute the one scalar `miss` themselves) so the styles can be compared
 // A/B/C without any shared-state coupling — and style 0 stays byte-for-byte the shipped tape.
@@ -5003,11 +5012,8 @@ function drawGlideGuide() {
   return drawGlideGuide_tape();
 }
 function drawGlideGuide_tape() {
-  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
-  const spd = Math.hypot(b.vx, b.vy);
-  // same band the physics auto-lean uses (GLIDE_* consts) + a small display margin.
-  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
-  if (!inGlide) { glidePrevShown = false; return; }
+  // same band the physics auto-lean uses (GLIDE_* consts) — shared with the badge via ngInGlide().
+  if (!ngInGlide()) { glidePrevShown = false; return; }
 
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
   const ax = bsx, ay = bsy - px(10);                 // anchor (lifted off the booster)
@@ -5144,10 +5150,7 @@ function drawGlideGuide_tape() {
 // a big stack of chevrons pointing the way you must BANK, growing + reddening with the miss, plus one
 // verb line + the distance and the wing-inversion teaching sub-line. Green ✓ / LOCKED when on track.
 function drawGlideGuide_arrow() {
-  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
-  const spd = Math.hypot(b.vx, b.vy);
-  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
-  if (!inGlide) { glidePrevShown = false; return; }
+  if (!ngInGlide()) { glidePrevShown = false; return; }
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
   const ax = bsx, ay = bsy - px(10);
   const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
@@ -5216,10 +5219,7 @@ function drawGlideGuide_arrow() {
 // SEEN, not just told (bank LEFT → the velocity vector swings RIGHT, toward the deck). Colored off
 // the real landing miss so it stays honest with the physics.
 function drawGlideGuide_slope() {
-  if (!(mode === 'ocean' || mode === 'tower') || !b || scene !== 'flying' || b.opening) return;
-  const spd = Math.hypot(b.vx, b.vy);
-  const inGlide = b.vy < 0 && b.y < GLIDE_TOP_Y && b.y > (GLIDE_FLOOR_Y - 400) && spd < GLIDE_ENTRY_SPD && b.thr < 0.3;
-  if (!inGlide) { glidePrevShown = false; return; }
+  if (!ngInGlide()) { glidePrevShown = false; return; }
   const bsx = w2sX(b.x), bsy = w2sY(b.y + curveOff(b.x));
   const ay = bsy - px(10);
   const fmt = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
@@ -7605,12 +7605,16 @@ function uiButton(x, y, w, h, lab, fn, accent) {
 // Persistent glide-steer CONVENTION badge (ocean/tower, in flight). Convention is LOCKED to lean-away
 // (no 'B' toggle); this always-on label just reminds the pilot which way banking walks the track.
 function drawGlideConventionBadge() {
-  if (scene !== 'flying' && scene !== 'paused') return;
-  if (mode !== 'ocean' && mode !== 'tower') return;
+  // Only while actually GLIDING (same gate as the glide guide, which requires scene==='flying'). During
+  // the decel burn the top belongs to the urgent red hint banner + burn-stop line; this badge showing
+  // there was the top clutter the pilot flagged. Gating on ngInGlide() clears the burn phase AND pairs
+  // the badge with the guide it explains — they now appear and disappear together.
+  if (!ngInGlide()) return;
   const line1 = 'GLIDE STEER: LEAN AWAY';
   const line2 = 'bank RIGHT → curve LEFT';
   const col = '#e8b93c';
-  const cx = W / 2, y = px(30);
+  // Sits BELOW the hint banner (px26) + burn-stop line (px48) so they never overlap.
+  const cx = W / 2, y = px(64);
   const w = px(300), h = px(34);
   ctx.save();
   ctx.fillStyle = 'rgba(6,10,16,0.55)';
