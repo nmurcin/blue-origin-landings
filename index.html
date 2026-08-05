@@ -538,7 +538,7 @@ const SPEED_OF_SOUND = 340;          // m/s, for the displayed Mach number
 // RCS propellant bank per vehicle (a SEPARATE small pool from the main engine fuel). Steering
 // spends it; when it's dry, attitude control falls back to aero fins only. Sized to scale — the
 // small MK1 lander carries far less. (kg, game-tuned.)
-const RCS0 = { ocean: 1200, tower: 1400, mars: 2000, moon: 400 };  // EXP: booster RCS DOUBLED (600→1200, 700→1400) per playtest. MK1 ×25 (long Apollo approach needs more RCS)
+const RCS0 = { ocean: 1200, tower: 1400, mars: 500, moon: 400 };  // EXP: booster RCS DOUBLED (600→1200, 700→1400) per playtest. MK1 RCS CUT 75% (2000→500) per playtest — attitude propellant is now scarce, so ration your drift-nulling.
 const RCS_BURN = 55;                 // kg/s spent while steering at full input — burns fast now
 
 function applyModeParams(m) {
@@ -565,8 +565,11 @@ function applyModeParams(m) {
     //     dry (full tank = only ~321 s of continuous full thrust). Skill is rewarded, waste bites.
     G = 1.62; RHO0 = 0; HSCALE = 50000;
     ENTRY_Y = 0; FLIP_Y = 0;
-    DRY_MASS = 7200; FUEL0 = 2400;
-    THRUST = 3.37e4; MDOT = 7.471;         // = 3.37e4 / (460·9.80665); TWR@wet≈2.17, Δv≈1298 m/s
+    DRY_MASS = 7200; FUEL0 = 600;          // FUEL CUT 75% (was 2400) per playtest — makes MK1 genuinely
+                                           // fuel-limited: ~80 s of continuous full thrust, Δv≈361 m/s (was
+                                           // 1298) → now BELOW the ~450 m/s a sloppy descent needs, so only a
+                                           // clean, efficient flight lands with margin. Waste = you run dry.
+    THRUST = 3.37e4; MDOT = 7.471;         // = 3.37e4 / (460·9.80665); TWR@wet≈2.67 (7.8 t wet), Δv≈361 m/s
     CDA_AX = 0; CDA_LAT = 0;               // vacuum — no aero
   } else if (m === 'moon') {
     // BLUE MOON MK2 — rides New Glenn to orbit, docks with a transfer stage for propellant,

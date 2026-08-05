@@ -14,6 +14,7 @@ nothing regressed. Ordered fast->slow so a cheap failure aborts early.
   9. _stop_latch.py        — STOP marker arms once then stays on through hard tilt / vy overshoot (no flicker)
  10. _mars_random_field.py — lunar terrain + pads randomize per run; ×N assigned by narrowness; physics==render
  11. _plume_shot.py        — BE-7 plume deflects off the regolith when low (reaches ground), not when high
+ 12. _mars_fuel_sweep.py   — after the 75% fuel cut, a clean descent from the 1350 m spawn still lands with fuel left
                              (the low-altitude touchdown path the autopilot scan doesn't reach)
 
 Run: py testing/green_gate.py            (exit 0 iff all pass)
@@ -40,6 +41,7 @@ STEPS = [
     ("stop-latch",      ["testing/_stop_latch.py"],           "exit", True),   # STOP marker arms once then stays on (no flicker on tilt/overshoot)
     ("mars-random",     ["testing/_mars_random_field.py"],    "exit", True),   # terrain+pads re-roll per run; ×N by narrowness; physics==render
     ("plume-splash",    ["testing/_plume_shot.py"],           "exit", True),   # BE-7 plume deflects off ground (reaches when low, not when high; no crash)
+    ("mars-fuel-budget",["testing/_mars_fuel_sweep.py"],      "exit", True),   # after 75% fuel cut: a CLEAN descent from the 1350 m spawn still lands with fuel to spare (hard, not impossible)
 ]
 
 
