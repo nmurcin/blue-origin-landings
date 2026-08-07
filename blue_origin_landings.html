@@ -164,6 +164,7 @@
   from publicly available data and tuned for gameplay — they are not official specifications.</footer>
 </main>
 <a id="blogLink" href="#about">about this rocket landing game →</a>
+<button id="fsBtn" type="button" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
 <div id="gate">
   <div id="gateCard">
     <h2>JOIN THE FLIGHT ROSTER</h2>
@@ -297,6 +298,13 @@
               font:11px "SF Mono", Menlo, monospace; color:#76828c; text-decoration:none; }
   #blogLink:hover { color:#aeb9c2; }
   body.playing #blogLink { display:none; }
+  #fsBtn { position:fixed; top:calc(10px + env(safe-area-inset-top)); right:14px; z-index:8;
+           width:34px; height:34px; padding:0; border-radius:8px; cursor:pointer;
+           background:rgba(10,16,24,0.55); border:1px solid rgba(255,255,255,0.14);
+           color:#aeb9c2; font-size:17px; line-height:32px; text-align:center;
+           -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); }
+  #fsBtn:hover { color:#f4cc5e; border-color:rgba(244,204,94,0.5); }
+  body.showAbout #fsBtn { display:none; }
   @media (max-width:700px) {
     /* in flight the body.inflight rule lifts it above the control panel */
     #sponsor { width:118px; right:8px; bottom:calc(8px + env(safe-area-inset-bottom)); }
@@ -1322,6 +1330,35 @@ document.getElementById('gateSignin').addEventListener('click', () => {
   document.querySelectorAll('#about a.play').forEach(a =>
     a.addEventListener('click', e => { e.preventDefault(); closeAbout(); }));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('showAbout')) closeAbout(); });
+
+  // Fullscreen toggle — resize() already keys off window.innerWidth/Height, so the
+  // canvas auto-fits when the fullscreen change fires a resize event.
+  const fsBtn = document.getElementById('fsBtn');
+  const fsTarget = document.documentElement;
+  function fsActive() { return document.fullscreenElement || document.webkitFullscreenElement; }
+  function toggleFullscreen() {
+    if (fsActive()) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    } else {
+      const req = fsTarget.requestFullscreen || fsTarget.webkitRequestFullscreen;
+      if (req) { const p = req.call(fsTarget); if (p && p.catch) p.catch(function(){}); }
+    }
+  }
+  function syncFsBtn() {
+    if (!fsBtn) return;
+    const active = !!fsActive();
+    fsBtn.textContent = active ? '×' : '⛶';
+    fsBtn.title = active ? 'Exit fullscreen (F)' : 'Fullscreen (F)';
+  }
+  if (fsBtn) fsBtn.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', syncFsBtn);
+  document.addEventListener('webkitfullscreenchange', syncFsBtn);
+  document.addEventListener('keydown', e => {
+    if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      e.preventDefault(); toggleFullscreen();
+    }
+  });
 })();
 
 // Sign out → drop back to an anonymous session (play continues); clears the local pilot + unlocks.
